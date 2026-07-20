@@ -49,12 +49,26 @@ def _rf_cloud(args: list[str]) -> str:
 
 
 def stage_video(video: Path, batch_id: str) -> None:
-    """Upload the video into a Data Staging batch."""
-    _rf_cloud([
-        "data-staging", "create-batch-of-videos",
-        "--videos-dir", str(video.parent),
-        "--batch-id", batch_id,
-    ])
+    """Upload ONE video into a Data Staging batch.
+
+    The CLI stages a whole directory, so the file is linked into a private
+    temp dir first — staging ``video.parent`` directly would upload every
+    sibling video and bill for all of them.
+    """
+    import shutil
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="reelcut_stage_") as tmp:
+        target = Path(tmp) / video.name
+        try:
+            target.hardlink_to(video)
+        except OSError:
+            shutil.copy2(video, target)
+        _rf_cloud([
+            "data-staging", "create-batch-of-videos",
+            "--videos-dir", tmp,
+            "--batch-id", batch_id,
+        ])
 
 
 def submit_job(
@@ -74,24 +88,17 @@ def submit_job(
         "--max-video-fps", str(int(round(sample_fps))),
         "--aggregation-format", "jsonl",
     ]
-    if job_id:
-        args += ["--job-id", job_id]
+    # Always pass an explicit job id so no output-parsing is needed.
+    # Constraint (API): lowercase letters/digits/hyphens, <= 20 chars.
+    job_id = job_id or f"{batch_id}-j"
+    job_id = "".join(
+        c for c in job_id.lower() if c.isalnum() or c == "-"
+    )[:20].strip("-")
+    args += ["--job-id", job_id]
     if notifications_url:
         args += ["--notifications-url", notifications_url]
-    out = _rf_cloud(args)
-    for token in out.replace("=", " ").replace(":", " ").split():
-        if token.startswith("job"):  # CLI prints the created job id
-            continue
-    # The CLI prints a line containing the job id; fall back to provided one.
-    for line in out.splitlines():
-        low = line.lower()
-        if "job" in low and ("id" in low or "created" in low):
-            candidates = [t.strip(" .,'\"") for t in line.split() if len(t) > 8]
-            if candidates:
-                return candidates[-1]
-    if job_id:
-        return job_id
-    raise RuntimeError(f"could not parse job id from rf-cloud output:\n{out}")
+    _rf_cloud(args)
+    return job_id
 
 
 def job_status(job_id: str) -> str:
@@ -101,13 +108,26 @@ def job_status(job_id: str) -> str:
 
 
 def wait_for_job(job_id: str, poll_s: float = 30.0, timeout_s: float = 4 * 3600) -> None:
-    """Poll until the job reports success; raise on failure/timeout."""
+    """Poll the typed metadata API until the job hits a terminal state."""
+    import os
+
+    from inference_cli.lib.roboflow_cloud.batch_processing.api_operations import (
+        get_batch_job_metadata,
+    )
+    from inference_cli.lib.roboflow_cloud.common import get_workspace
+
+    api_key = os.environ["ROBOFLOW_API_KEY"]
+    workspace = get_workspace(api_key=api_key)
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        details = job_status(job_id).lower()
-        if "fail" in details or "error" in details and "0 error" not in details:
-            raise RuntimeError(f"batch job {job_id} failed:\n{details[-1500:]}")
-        if "success" in details or "completed" in details or "finished" in details:
+        meta = get_batch_job_metadata(
+            workspace=workspace, job_id=job_id, api_key=api_key
+        )
+        if meta.error:
+            raise RuntimeError(
+                f"batch job {job_id} failed: {meta.last_notification}"
+            )
+        if meta.is_terminal:
             return
         time.sleep(poll_s)
     raise TimeoutError(f"batch job {job_id} still running after {timeout_s}s")
