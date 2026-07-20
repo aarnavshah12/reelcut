@@ -55,6 +55,24 @@ The detection model is a workflow parameter: currently a public Universe
 stand-in (`my-first-project-gsrpg/18`) until our RF-DETR-small finishes
 training; swap = one `--model-id` flag / one default change.
 
+## GPU offload (Roboflow Batch Processing)
+
+Local in-process inference is ~20x slower than realtime on CPU (OCR-heavy).
+For full games, run stage 1 on a Roboflow cloud GPU instead:
+
+```bash
+uv run python scripts/run_batch.py --video game.mp4 --jersey 10 \
+    --team-color blue --target-frame 1500 --target-box x,y,w,h --dry-run
+```
+
+Drop `--dry-run` to actually submit (costs Roboflow credits per job). The
+script stages the video, runs `reelcut-tracking` on GPU via Batch Processing,
+exports JSONL results, and finishes identity/scoring/cutting locally in
+seconds. `python -m reelcut --batch-results DIR` re-runs downstream stages
+against already-exported results. This is the same API surface a future web
+backend would call from an upload handler (webhook support included), so the
+CLI-vs-web-app question is just about who calls these functions.
+
 ## Tests
 
 ```bash

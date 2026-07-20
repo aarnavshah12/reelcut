@@ -87,6 +87,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="use StubWorkflowClient (no Roboflow needed)",
     )
     parser.add_argument(
+        "--batch-results", type=Path, default=None, metavar="DIR",
+        help="use exported Roboflow Batch Processing results (GPU offload) "
+             "instead of running inference locally; see scripts/run_batch.py",
+    )
+    parser.add_argument(
         "--workflow", default=None, metavar="ID", help="workspace workflow slug"
     )
     parser.add_argument(
@@ -145,8 +150,14 @@ def main(argv: list[str] | None = None) -> int:
     from .pipeline import run_pipeline
     from .workflow_client import RoboflowWorkflowClient, StubWorkflowClient
 
+    if args.stub and args.batch_results:
+        parser.error("--stub and --batch-results are mutually exclusive")
     if args.stub:
         client: Any = StubWorkflowClient(cfg.seed, args.jersey)
+    elif args.batch_results:
+        from .batch import BatchResultsClient
+
+        client = BatchResultsClient(args.batch_results)
     else:
         api_key = os.environ.get("ROBOFLOW_API_KEY")
         if not api_key:
