@@ -133,8 +133,30 @@ def wait_for_job(job_id: str, poll_s: float = 30.0, timeout_s: float = 4 * 3600)
     raise TimeoutError(f"batch job {job_id} still running after {timeout_s}s")
 
 
+def results_batch_of(job_id: str) -> str:
+    """The job's OUTPUT batch id (from its completion notification) — NOT the
+    input batch id; exporting that just downloads the staged video back."""
+    import os
+
+    from inference_cli.lib.roboflow_cloud.batch_processing.api_operations import (
+        get_batch_job_metadata,
+    )
+    from inference_cli.lib.roboflow_cloud.common import get_workspace
+
+    api_key = os.environ["ROBOFLOW_API_KEY"]
+    meta = get_batch_job_metadata(
+        workspace=get_workspace(api_key=api_key), job_id=job_id, api_key=api_key
+    )
+    batches = (meta.last_notification or {}).get("resultsBatches") or []
+    if not batches:
+        raise RuntimeError(
+            f"job {job_id} reports no results batches yet: {meta.last_notification}"
+        )
+    return batches[0]
+
+
 def export_results(batch_id: str, target_dir: Path) -> Path:
-    """Download the job's output batch (JSONL aggregation) to target_dir."""
+    """Download a results batch (JSONL aggregation) to target_dir."""
     target_dir.mkdir(parents=True, exist_ok=True)
     _rf_cloud([
         "data-staging", "export-batch",
@@ -285,24 +307,32 @@ class BatchResultsClient:
 
     def _records(self) -> list[tuple[int, dict[str, Any]]]:
         rows: list[tuple[int, dict[str, Any]]] = []
-        files = sorted(self.results_dir.rglob("*.jsonl"))
+        files = [
+            p for p in sorted(self.results_dir.rglob("*.jsonl"))
+            if not p.name.startswith(".")     # skip export logs/manifests
+        ]
         if not files:
             raise FileNotFoundError(
                 f"no .jsonl batch results under {self.results_dir}"
             )
+        skipped_shapes: set[tuple[str, ...]] = set()
         for path in files:
             for i, line in enumerate(path.read_text().splitlines()):
                 if not line.strip():
                     continue
                 record = json.loads(line)
+                outputs = _outputs_of(record)
+                if outputs is record and "tracked_players" not in record:
+                    # manifest/metadata line, not a predictions record
+                    skipped_shapes.add(tuple(sorted(record.keys())[:8]))
+                    continue
                 idx = _find_frame_index(record)
                 rows.append((idx if idx is not None else i, record))
-        first = rows[0][1]
-        if _outputs_of(first) is first and "tracked_players" not in first:
+        if not rows:
             raise ValueError(
-                "unrecognized batch record shape; top-level keys: "
-                f"{sorted(first.keys())[:12]} — adjust batch._OUTPUT_WRAPPERS/"
-                "_FRAME_KEYS to match this export."
+                "no recognizable prediction records in batch export; "
+                f"saw line shapes: {sorted(skipped_shapes)} — adjust "
+                "batch._OUTPUT_WRAPPERS/_FRAME_KEYS to match this export."
             )
         rows.sort(key=lambda r: r[0])
         return rows

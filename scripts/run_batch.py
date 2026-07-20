@@ -65,8 +65,9 @@ def main() -> int:
     )
     print(f"[batch] job {job_id} running — polling every 30s")
     batch.wait_for_job(job_id)
-    print("[batch] exporting results")
-    batch.export_results(batch_id, results_dir)
+    results_batch = batch.results_batch_of(job_id)
+    print(f"[batch] exporting results batch {results_batch}")
+    batch.export_results(results_batch, results_dir)
 
     from reelcut.__main__ import main as reelcut_main
     cli = [

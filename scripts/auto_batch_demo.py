@@ -74,9 +74,10 @@ def main() -> int:
 
     print(f"[demo] waiting for job {args.job_id} ...")
     batch.wait_for_job(args.job_id, poll_s=30.0)
-    print("[demo] job finished; exporting results")
+    results_batch = batch.results_batch_of(args.job_id)
+    print(f"[demo] job finished; exporting results batch {results_batch}")
     results_dir = args.out / "batch_results"
-    batch.export_results(args.batch_id, results_dir)
+    batch.export_results(results_batch, results_dir)
 
     cfg = ReelcutConfig()
     client = BatchResultsClient(results_dir)
