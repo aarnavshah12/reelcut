@@ -9,15 +9,91 @@ All distances are normalized by the target bbox height at that timestamp
 """
 from __future__ import annotations
 
+import math
+from bisect import bisect_left, bisect_right
+from dataclasses import replace
+
 from .config import ReelcutConfig
 from .types import (
     BallObs,
+    BBox,
     FrameObservation,
     IdentityPoint,
     InvolvementEvent,
     ScorePoint,
 )
 
+_EPS = 1e-9
+# Speed std-dev (px/s) below which a speed series counts as "idle" for the
+# possession correlation gate.
+_IDLE_SPEED_STD = 1e-3
+
+
+# --------------------------------------------------------------------------- #
+# small helpers
+# --------------------------------------------------------------------------- #
+
+def _median(vals: list[float]) -> float:
+    s = sorted(vals)
+    mid = len(s) // 2
+    return s[mid] if len(s) % 2 else 0.5 * (s[mid - 1] + s[mid])
+
+
+def _sample_period(timestamps: list[float]) -> float:
+    """Median spacing between consecutive timestamps; 0.0 with < 2 samples."""
+    if len(timestamps) < 2:
+        return 0.0
+    return _median([b - a for a, b in zip(timestamps, timestamps[1:])])
+
+
+def _is_real_ball(frames: list[FrameObservation], i: int) -> bool:
+    """True when frame i exists and carries a non-interpolated ball."""
+    if not 0 <= i < len(frames):
+        return False
+    b = frames[i].ball
+    return b is not None and not b.interpolated
+
+
+def _direction_change_deg(
+    a: tuple[float, float], b: tuple[float, float]
+) -> float | None:
+    """Angle in degrees between velocities a and b; None if either is ~zero."""
+    na, nb = math.hypot(*a), math.hypot(*b)
+    if na < _EPS or nb < _EPS:
+        return None
+    cos = (a[0] * b[0] + a[1] * b[1]) / (na * nb)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
+
+
+def _speeds_correlated(
+    ball_speeds: list[float], target_speeds: list[float], min_corr: float
+) -> bool:
+    """Pearson-correlation gate for possession.
+
+    Degenerate variance: both series idle (near-zero variance) -> correlated
+    (kid standing with the ball IS possession); exactly one idle -> not.
+    """
+    n = len(ball_speeds)
+    if n < 2:
+        return False
+    ma = sum(ball_speeds) / n
+    mb = sum(target_speeds) / n
+    sa = math.sqrt(sum((x - ma) ** 2 for x in ball_speeds) / n)
+    sb = math.sqrt(sum((x - mb) ** 2 for x in target_speeds) / n)
+    a_idle, b_idle = sa < _IDLE_SPEED_STD, sb < _IDLE_SPEED_STD
+    if a_idle and b_idle:
+        return True
+    if a_idle or b_idle:
+        return False
+    cov = sum(
+        (x - ma) * (y - mb) for x, y in zip(ball_speeds, target_speeds)
+    ) / n
+    return cov / (sa * sb) > min_corr
+
+
+# --------------------------------------------------------------------------- #
+# public API
+# --------------------------------------------------------------------------- #
 
 def interpolate_ball(
     frames: list[FrameObservation], max_gap_s: float
@@ -30,7 +106,40 @@ def interpolate_ball(
     the middle of the gap. Longer gaps stay None. Returns new list; input
     unmodified.
     """
-    raise NotImplementedError
+    out = list(frames)
+    real = [
+        i for i, f in enumerate(frames)
+        if f.ball is not None and not f.ball.interpolated
+    ]
+    for a, b in zip(real, real[1:]):
+        if b - a < 2:
+            continue
+        if any(frames[j].ball is not None for j in range(a + 1, b)):
+            continue  # already (partially) filled; leave alone
+        t0, t1 = frames[a].timestamp_s, frames[b].timestamp_s
+        span = t1 - t0
+        if span <= 0 or span >= max_gap_s:  # only strictly-shorter gaps
+            continue
+        ba, bb = frames[a].ball, frames[b].ball
+        conf_base = min(ba.confidence, bb.confidence)
+        for j in range(a + 1, b):
+            f = (frames[j].timestamp_s - t0) / span
+            falloff = min(f, 1.0 - f)  # 0 at the bounds, peaks mid-gap
+            box = BBox(
+                x=ba.bbox.x + (bb.bbox.x - ba.bbox.x) * f,
+                y=ba.bbox.y + (bb.bbox.y - ba.bbox.y) * f,
+                w=ba.bbox.w + (bb.bbox.w - ba.bbox.w) * f,
+                h=ba.bbox.h + (bb.bbox.h - ba.bbox.h) * f,
+            )
+            out[j] = replace(
+                frames[j],
+                ball=BallObs(
+                    bbox=box,
+                    confidence=conf_base * (1.0 - falloff),
+                    interpolated=True,
+                ),
+            )
+    return out
 
 
 def score_timeline(
@@ -56,14 +165,172 @@ def score_timeline(
     where the ball is interpolated still count for proximity but not for touch.
     Timestamps where identity confidence is 0 (target absent) score 0.
     """
-    raise NotImplementedError
+    sport = cfg.sport
+    n_f = len(frames)
+    frame_ts = [f.timestamp_s for f in frames]
+    period = _sample_period(frame_ts) or (1.0 / cfg.sample_fps)
+    tol = period / 2.0 + _EPS
+
+    # Ball centers and finite-difference velocities between ADJACENT samples;
+    # a None gap between detections leaves the bordering velocities unset.
+    centers = [
+        (f.ball.bbox.cx, f.ball.bbox.cy) if f.ball is not None else None
+        for f in frames
+    ]
+    vel_in: list[tuple[float, float] | None] = [None] * n_f
+    for i in range(1, n_f):
+        c0, c1 = centers[i - 1], centers[i]
+        dt = frame_ts[i] - frame_ts[i - 1]
+        if c0 is not None and c1 is not None and dt > 0:
+            vel_in[i] = ((c1[0] - c0[0]) / dt, (c1[1] - c0[1]) / dt)
+
+    def vel_out(i: int) -> tuple[float, float] | None:
+        return vel_in[i + 1] if i + 1 < n_f else None
+
+    ball_speed: list[float | None] = []
+    for i in range(n_f):
+        v = vel_in[i] if vel_in[i] is not None else vel_out(i)
+        ball_speed.append(math.hypot(*v) if v is not None else None)
+
+    def nearest_frame(t: float) -> int | None:
+        """Frame index nearest t, within half a sample period; else None."""
+        if not frames:
+            return None
+        k = bisect_left(frame_ts, t)
+        best: int | None = None
+        for j in (k - 1, k):
+            if 0 <= j < n_f and (
+                best is None or abs(frame_ts[j] - t) < abs(frame_ts[best] - t)
+            ):
+                best = j
+        if best is not None and abs(frame_ts[best] - t) <= tol:
+            return best
+        return None
+
+    # Target speed (px/s): reported speed when present, else finite-differenced
+    # from consecutive identity bboxes.
+    t_speed: list[float | None] = []
+    for i, ip in enumerate(identity):
+        if ip.speed is not None:
+            t_speed.append(ip.speed)
+            continue
+        s: float | None = None
+        if i > 0 and ip.bbox is not None and identity[i - 1].bbox is not None:
+            dt = ip.timestamp_s - identity[i - 1].timestamp_s
+            if dt > 0:
+                prev = identity[i - 1].bbox
+                s = math.hypot(ip.bbox.cx - prev.cx, ip.bbox.cy - prev.cy) / dt
+        t_speed.append(s)
+
+    # Ball geometry per identity sample, normalized by target bbox height.
+    match: list[int | None] = []
+    norm_dist: list[float | None] = []
+    for ip in identity:
+        fi = nearest_frame(ip.timestamp_s)
+        match.append(fi)
+        dn: float | None = None
+        if fi is not None and ip.bbox is not None and ip.bbox.h > 0:
+            fball = frames[fi].ball
+            if fball is not None:
+                dn = math.hypot(
+                    fball.bbox.cx - ip.bbox.cx, fball.bbox.cy - ip.bbox.cy
+                ) / ip.bbox.h
+        norm_dist.append(dn)
+
+    points: list[ScorePoint] = []
+    run_start: int | None = None  # first index of current within-radius run
+    for i, ip in enumerate(identity):
+        dn = norm_dist[i]
+        within = dn is not None and dn <= sport.possession_radius + _EPS
+        if within and run_start is None:
+            run_start = i
+        elif not within:
+            run_start = None
+
+        if ip.confidence <= 0.0 or ip.bbox is None or ip.bbox.h <= 0:
+            points.append(ScorePoint(ip.timestamp_s, 0.0, ()))
+            continue
+
+        raw = 0.0
+        tags: list[str] = []
+
+        # proximity
+        prox = 0.0
+        if dn is not None:
+            if dn <= sport.ball_near_dist:
+                prox = 1.0
+            elif dn < sport.ball_far_dist:
+                prox = (sport.ball_far_dist - dn) / (
+                    sport.ball_far_dist - sport.ball_near_dist
+                )
+        raw += sport.w_proximity * prox
+        if prox > 0.5:
+            tags.append("near_ball")
+
+        # possession: sustained closeness + speed correlation over that window
+        if (
+            within
+            and run_start is not None
+            and ip.timestamp_s - identity[run_start].timestamp_s + _EPS
+            >= sport.possession_min_s
+        ):
+            bs: list[float] = []
+            ts_: list[float] = []
+            for j in range(run_start, i + 1):
+                fj = match[j]
+                if fj is None or ball_speed[fj] is None or t_speed[j] is None:
+                    continue
+                bs.append(ball_speed[fj])
+                ts_.append(t_speed[j])
+            if _speeds_correlated(bs, ts_, sport.possession_speed_corr):
+                raw += sport.w_possession
+                tags.append("possession")
+
+        # touch: sharp ball direction change nearby, real detections only
+        fi = match[i]
+        if (
+            fi is not None
+            and dn is not None
+            and dn <= sport.touch_radius + _EPS
+            and _is_real_ball(frames, fi)
+            and _is_real_ball(frames, fi - 1)
+            and _is_real_ball(frames, fi + 1)
+        ):
+            vi, vo = vel_in[fi], vel_out(fi)
+            if vi is not None and vo is not None:
+                ang = _direction_change_deg(vi, vo)
+                if ang is not None and ang > sport.touch_direction_change_deg:
+                    raw += sport.w_touch
+                    tags.append("touch")
+
+        # sprint fallback (player-heights/s)
+        sp = t_speed[i]
+        if sp is not None and sp / ip.bbox.h > sport.sprint_speed:
+            raw += sport.w_sprint
+            tags.append("sprint")
+
+        score = min(1.0, max(0.0, raw)) * ip.confidence
+        points.append(ScorePoint(ip.timestamp_s, score, tuple(tags)))
+    return points
 
 
 def smooth_scores(
     points: list[ScorePoint], window_s: float
 ) -> list[ScorePoint]:
     """Centered rolling-mean over ``window_s``; tags are unioned over the window."""
-    raise NotImplementedError
+    if not points:
+        return []
+    ts = [p.timestamp_s for p in points]
+    half = window_s / 2.0 + _EPS
+    out: list[ScorePoint] = []
+    for p in points:
+        lo = bisect_left(ts, p.timestamp_s - half)
+        hi = bisect_right(ts, p.timestamp_s + half)
+        window = points[lo:hi]
+        mean = sum(q.score for q in window) / len(window)
+        tags = tuple(sorted({t for q in window for t in q.tags}))
+        out.append(ScorePoint(p.timestamp_s, mean, tags))
+    return out
 
 
 def extract_events(
@@ -73,4 +340,28 @@ def extract_events(
 
     Event tags = union of member tags; peak/mean over member scores.
     """
-    raise NotImplementedError
+    period = _sample_period([p.timestamp_s for p in points])
+    events: list[InvolvementEvent] = []
+    i, n = 0, len(points)
+    while i < n:
+        if points[i].score < threshold:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and points[j + 1].score >= threshold:
+            j += 1
+        run = points[i : j + 1]
+        duration = run[-1].timestamp_s - run[0].timestamp_s + period
+        if duration + _EPS >= min_duration_s:
+            scores = [p.score for p in run]
+            events.append(
+                InvolvementEvent(
+                    start_s=run[0].timestamp_s,
+                    end_s=run[-1].timestamp_s,
+                    peak_score=max(scores),
+                    mean_score=sum(scores) / len(scores),
+                    tags=tuple(sorted({t for p in run for t in p.tags})),
+                )
+            )
+        i = j + 1
+    return events

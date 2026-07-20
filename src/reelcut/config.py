@@ -55,7 +55,7 @@ class ReelcutConfig:
     # workflow / inference
     workspace: str = "aarnavs-space"
     workflow_id: str = "reelcut-tracking"       # URL slug of the saved workflow
-    model_id: str = "my-first-project-gsrpg/18"  # stand-in until our RF-DETR lands
+    model_id: str = "my-first-project-gsrpg-p5v9o/1"  # our RF-DETR-small (mAP50 81.1)
     api_url: str | None = None                  # None = in-process; else inference server URL
     player_classes: tuple[str, ...] = ("player", "goalkeeper", "goalie")
     referee_classes: tuple[str, ...] = ("referee", "ref")
