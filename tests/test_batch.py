@@ -68,8 +68,23 @@ def test_client_orders_by_frame_and_errors_on_alien_shape(tmp_path):
     alien = tmp_path / "alien"
     alien.mkdir()
     (alien / "r.jsonl").write_text(json.dumps({"foo": 1, "bar": 2}) + "\n")
-    with pytest.raises(ValueError, match="unrecognized batch record shape"):
+    with pytest.raises(ValueError, match="no recognizable prediction records"):
         list(BatchResultsClient(alien).run(tmp_path / "missing.mp4", CFG))
+
+
+def test_client_skips_manifest_lines_and_hidden_files(tmp_path):
+    (tmp_path / ".export_log.jsonl").write_text(
+        json.dumps({"file_metadata": {}, "local_path": "x"}) + "\n"
+    )
+    rows = [
+        {"file_metadata": {}, "local_path": "y"},          # manifest line
+        record(frame=3, tracked=[pred(tid=9)]),
+    ]
+    (tmp_path / "results.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n"
+    )
+    obs = list(BatchResultsClient(tmp_path).run(tmp_path / "missing.mp4", CFG))
+    assert len(obs) == 1 and obs[0].players[0].track_id == 9
 
 
 def test_client_requires_results_files(tmp_path):
