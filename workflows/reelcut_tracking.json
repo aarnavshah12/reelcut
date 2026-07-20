@@ -8,7 +8,7 @@
     {
       "type": "WorkflowParameter",
       "name": "model_id",
-      "default_value": "my-first-project-gsrpg-p5v9o/1"
+      "default_value": "ia-foot-8ecu7/1"
     },
     {
       "type": "WorkflowParameter",
