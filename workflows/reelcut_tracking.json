@@ -1,10 +1,25 @@
 {
   "version": "1.0",
   "inputs": [
-    { "type": "WorkflowImage", "name": "image" },
-    { "type": "WorkflowParameter", "name": "model_id", "default_value": "my-first-project-gsrpg-p5v9o/1" },
-    { "type": "WorkflowParameter", "name": "detection_confidence", "default_value": 0.1 },
-    { "type": "WorkflowParameter", "name": "enable_cmc", "default_value": true }
+    {
+      "type": "WorkflowImage",
+      "name": "image"
+    },
+    {
+      "type": "WorkflowParameter",
+      "name": "model_id",
+      "default_value": "my-first-project-gsrpg-p5v9o/1"
+    },
+    {
+      "type": "WorkflowParameter",
+      "name": "detection_confidence",
+      "default_value": 0.1
+    },
+    {
+      "type": "WorkflowParameter",
+      "name": "enable_cmc",
+      "default_value": true
+    }
   ],
   "steps": [
     {
@@ -22,11 +37,17 @@
       "predictions": "$steps.detector.predictions",
       "class_thresholds": {
         "player": 0.4,
+        "Player": 0.4,
         "goalkeeper": 0.4,
+        "Goalkeeper": 0.4,
         "goalie": 0.4,
         "referee": 0.4,
+        "Referee": 0.4,
         "ref": 0.4,
-        "ball": 0.15
+        "ball": 0.15,
+        "Ball": 0.15,
+        "goal": 0.5,
+        "Goal": 0.5
       },
       "default_threshold": 0.4
     },
@@ -47,13 +68,27 @@
                   "type": "DynamicOperand",
                   "operand_name": "_",
                   "operations": [
-                    { "type": "ExtractDetectionProperty", "property_name": "class_name" }
+                    {
+                      "type": "ExtractDetectionProperty",
+                      "property_name": "class_name"
+                    }
                   ]
                 },
-                "comparator": { "type": "in (Sequence)" },
+                "comparator": {
+                  "type": "in (Sequence)"
+                },
                 "right_operand": {
                   "type": "StaticOperand",
-                  "value": ["player", "goalkeeper", "goalie", "referee", "ref"]
+                  "value": [
+                    "player",
+                    "Player",
+                    "goalkeeper",
+                    "Goalkeeper",
+                    "goalie",
+                    "referee",
+                    "Referee",
+                    "ref"
+                  ]
                 }
               }
             ]
@@ -79,17 +114,35 @@
                   "type": "DynamicOperand",
                   "operand_name": "_",
                   "operations": [
-                    { "type": "ExtractDetectionProperty", "property_name": "class_name" }
+                    {
+                      "type": "ExtractDetectionProperty",
+                      "property_name": "class_name"
+                    }
                   ]
                 },
-                "comparator": { "type": "in (Sequence)" },
-                "right_operand": { "type": "StaticOperand", "value": ["ball"] }
+                "comparator": {
+                  "type": "in (Sequence)"
+                },
+                "right_operand": {
+                  "type": "StaticOperand",
+                  "value": [
+                    "ball",
+                    "Ball"
+                  ]
+                }
               }
             ]
           }
         },
-        { "type": "SortDetections", "mode": "confidence", "ascending": false },
-        { "type": "DetectionsSelection", "mode": "first" }
+        {
+          "type": "SortDetections",
+          "mode": "confidence",
+          "ascending": false
+        },
+        {
+          "type": "DetectionsSelection",
+          "mode": "first"
+        }
       ],
       "operations_parameters": {}
     },
@@ -110,11 +163,22 @@
                   "type": "DynamicOperand",
                   "operand_name": "_",
                   "operations": [
-                    { "type": "ExtractDetectionProperty", "property_name": "class_name" }
+                    {
+                      "type": "ExtractDetectionProperty",
+                      "property_name": "class_name"
+                    }
                   ]
                 },
-                "comparator": { "type": "in (Sequence)" },
-                "right_operand": { "type": "StaticOperand", "value": ["goal"] }
+                "comparator": {
+                  "type": "in (Sequence)"
+                },
+                "right_operand": {
+                  "type": "StaticOperand",
+                  "value": [
+                    "goal",
+                    "Goal"
+                  ]
+                }
               }
             ]
           }
@@ -184,10 +248,30 @@
     }
   ],
   "outputs": [
-    { "type": "JsonField", "name": "tracked_players", "selector": "$steps.velocity.velocity_detections" },
-    { "type": "JsonField", "name": "ball", "selector": "$steps.ball.predictions" },
-    { "type": "JsonField", "name": "jersey_texts", "selector": "$steps.stitch_ocr.ocr_text" },
-    { "type": "JsonField", "name": "goal_detections", "selector": "$steps.goals.predictions" },
-    { "type": "JsonField", "name": "raw_detections", "selector": "$steps.detector.predictions" }
+    {
+      "type": "JsonField",
+      "name": "tracked_players",
+      "selector": "$steps.velocity.velocity_detections"
+    },
+    {
+      "type": "JsonField",
+      "name": "ball",
+      "selector": "$steps.ball.predictions"
+    },
+    {
+      "type": "JsonField",
+      "name": "jersey_texts",
+      "selector": "$steps.stitch_ocr.ocr_text"
+    },
+    {
+      "type": "JsonField",
+      "name": "goal_detections",
+      "selector": "$steps.goals.predictions"
+    },
+    {
+      "type": "JsonField",
+      "name": "raw_detections",
+      "selector": "$steps.detector.predictions"
+    }
   ]
 }
