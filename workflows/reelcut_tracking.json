@@ -46,8 +46,8 @@
         "ref": 0.4,
         "ball": 0.15,
         "Ball": 0.15,
-        "goal": 0.5,
-        "Goal": 0.5
+        "goal": 0.15,
+        "Goal": 0.15
       },
       "default_threshold": 0.4
     },
