@@ -171,6 +171,7 @@ def export_results(batch_id: str, target_dir: Path) -> Path:
 # --------------------------------------------------------------------------- #
 
 _FRAME_KEYS = ("frame_number", "frame_offset", "frame_id", "frame")
+_RAW_GOAL_MIN_CONF = 0.08   # floor when mining goals from raw_detections
 _OUTPUT_WRAPPERS = ("outputs", "output", "result", "results", "predictions")
 
 
@@ -279,6 +280,21 @@ def _observation_from_record(
         b for b in (_bbox_of(p) for p in _predictions_list(outputs.get("goal_detections")))
         if b is not None
     )
+    if not goal_boxes:
+        # The workflow's Goal threshold can be too strict for out-of-domain
+        # footage (measured: futsal-trained model sees outdoor goals at
+        # 0.1-0.4 confidence). raw_detections is in the export, so mine it
+        # locally: top-2 goal-class boxes above a permissive floor.
+        candidates = [
+            (float(p.get("confidence") or 0.0), _bbox_of(p))
+            for p in _predictions_list(outputs.get("raw_detections"))
+            if str(p.get("class", "")).lower() == "goal"
+        ]
+        candidates = [
+            (c, b) for c, b in candidates if b is not None and c >= _RAW_GOAL_MIN_CONF
+        ]
+        candidates.sort(key=lambda cb: -cb[0])
+        goal_boxes = tuple(b for _, b in candidates[:2])
 
     return FrameObservation(
         frame_index=frame_index,
@@ -327,14 +343,17 @@ class BatchResultsClient:
                     skipped_shapes.add(tuple(sorted(record.keys())[:8]))
                     continue
                 idx = _find_frame_index(record)
-                rows.append((idx if idx is not None else i, record))
+                # Real exports carry NO frame key: one line per SAMPLED frame
+                # in order. idx None -> run() maps the sample counter to source
+                # time via cfg.sample_fps; idx present -> source frame index.
+                rows.append((idx, i, record))
         if not rows:
             raise ValueError(
                 "no recognizable prediction records in batch export; "
                 f"saw line shapes: {sorted(skipped_shapes)} — adjust "
                 "batch._OUTPUT_WRAPPERS/_FRAME_KEYS to match this export."
             )
-        rows.sort(key=lambda r: r[0])
+        rows.sort(key=lambda r: (r[0] if r[0] is not None else r[1]))
         return rows
 
     def run(self, video: Path, cfg: ReelcutConfig) -> Iterator[FrameObservation]:
@@ -347,7 +366,13 @@ class BatchResultsClient:
             fps, frame_w, frame_h = 30.0, 1280, 720
             cap = None
         try:
-            for frame_index, record in rows:
+            for source_idx, sample_idx, record in rows:
+                if source_idx is not None:
+                    frame_index = source_idx
+                    timestamp_s = source_idx / fps
+                else:
+                    timestamp_s = sample_idx / cfg.sample_fps
+                    frame_index = int(round(timestamp_s * fps))
                 frame_bgr = None
                 if cap is not None:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
@@ -358,7 +383,7 @@ class BatchResultsClient:
                 yield _observation_from_record(
                     record,
                     frame_index=frame_index,
-                    timestamp_s=frame_index / fps,
+                    timestamp_s=timestamp_s,
                     frame_w=frame_w,
                     frame_h=frame_h,
                     frame_bgr=frame_bgr,

@@ -90,3 +90,31 @@ def test_client_skips_manifest_lines_and_hidden_files(tmp_path):
 def test_client_requires_results_files(tmp_path):
     with pytest.raises(FileNotFoundError):
         list(BatchResultsClient(tmp_path).run(tmp_path / "v.mp4", CFG))
+
+
+def test_frameless_records_map_sample_counter_to_source_time(tmp_path):
+    """Real exports: no frame key, one line per sampled frame at cfg.sample_fps."""
+    rows = []
+    for _ in range(3):
+        r = record(tracked=[pred()])
+        del r["frame_number"]
+        rows.append(r)
+    (tmp_path / "results.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    obs = list(BatchResultsClient(tmp_path).run(tmp_path / "missing.mp4", CFG))
+    # sample i at 5 fps -> t = i/5 s -> source frame round(t*30) with 30fps default
+    assert [round(o.timestamp_s, 2) for o in obs] == [0.0, 0.2, 0.4]
+    assert [o.frame_index for o in obs] == [0, 6, 12]
+
+
+def test_goal_mining_from_raw_detections():
+    rec = record(tracked=[pred()])
+    rec["goal_detections"] = {"predictions": []}
+    rec["raw_detections"] = {"predictions": [
+        {"x": 30, "y": 300, "width": 60, "height": 100, "class": "Goal", "confidence": 0.18},
+        {"x": 900, "y": 310, "width": 55, "height": 95, "class": "Goal", "confidence": 0.12},
+        {"x": 500, "y": 300, "width": 50, "height": 90, "class": "Goal", "confidence": 0.03},  # below floor
+        {"x": 400, "y": 200, "width": 40, "height": 90, "class": "Player", "confidence": 0.9},
+    ]}
+    obs = _observation_from_record(rec, 10, 0.33, 1280, 720, None, CFG)
+    assert len(obs.goal_boxes) == 2          # two above the floor, capped at 2
+    assert obs.goal_boxes[0].h == 100        # highest confidence first
