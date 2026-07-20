@@ -234,6 +234,7 @@ def _observation_from_record(
     players: list[PlayerObs] = []
     ocr: list[OcrRead] = []
     texts = outputs.get("jersey_texts") or []
+    ocr_src = _predictions_list(outputs.get("ocr_source"))
     min_box_h = cfg.min_player_box_h_frac * frame_h
 
     for k, pred in enumerate(_predictions_list(outputs.get("tracked_players"))):
@@ -264,9 +265,17 @@ def _observation_from_record(
             ),
             torso_hsv=hist,
         ))
+        if not ocr_src:  # legacy alignment: texts follow tracked_players order
+            text = texts[k] if k < len(texts) else None
+            if text:
+                ocr.append(OcrRead(track_id=tid, text=str(text), confidence=1.0))
+
+    # new-tracks-only OCR: texts align with the ocr_source detections
+    for k, sp in enumerate(ocr_src):
+        tid = sp.get("tracker_id")
         text = texts[k] if k < len(texts) else None
-        if text:
-            ocr.append(OcrRead(track_id=tid, text=str(text), confidence=1.0))
+        if tid is not None and text:
+            ocr.append(OcrRead(track_id=int(tid), text=str(text), confidence=1.0))
 
     ball: BallObs | None = None
     ball_preds = _predictions_list(outputs.get("ball"))

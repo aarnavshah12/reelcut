@@ -231,7 +231,7 @@
       "type": "roboflow_core/dynamic_crop@v1",
       "name": "jersey_crops",
       "images": "$inputs.image",
-      "predictions": "$steps.stabilizer.tracked_detections"
+      "predictions": "$steps.tracker.new_instances"
     },
     {
       "type": "roboflow_core/ocr_model@v1",
@@ -262,6 +262,11 @@
       "type": "JsonField",
       "name": "jersey_texts",
       "selector": "$steps.stitch_ocr.ocr_text"
+    },
+    {
+      "type": "JsonField",
+      "name": "ocr_source",
+      "selector": "$steps.tracker.new_instances"
     },
     {
       "type": "JsonField",

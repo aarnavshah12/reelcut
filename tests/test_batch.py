@@ -106,6 +106,18 @@ def test_frameless_records_map_sample_counter_to_source_time(tmp_path):
     assert [o.frame_index for o in obs] == [0, 6, 12]
 
 
+def test_ocr_source_alignment_beats_player_order():
+    """With ocr_source present, texts map to NEW tracks, not tracked order."""
+    rec = record(
+        tracked=[pred(tid=3), pred(x=300, tid=7)],
+        texts=["24"],
+    )
+    rec["ocr_source"] = {"predictions": [pred(x=300, tid=7)]}  # text is for tid 7
+    obs = _observation_from_record(rec, 1, 0.033, 1280, 720, None, CFG)
+    assert len(obs.ocr) == 1
+    assert obs.ocr[0].track_id == 7 and obs.ocr[0].text == "24"
+
+
 def test_goal_mining_from_raw_detections():
     rec = record(tracked=[pred()])
     rec["goal_detections"] = {"predictions": []}

@@ -372,6 +372,9 @@ def _observation_from_prediction(
         class_names = data.get("class_name")
         velocities = data.get("velocity")
         speeds = data.get("speed")
+        # jersey_texts aligns with ocr_source (new-tracks-only OCR) when the
+        # workflow provides it; legacy workflows align texts with all players.
+        ocr_src = predictions.get("ocr_source")
         texts: Sequence[Any] = predictions.get("jersey_texts") or ()
         min_box_h = cfg.min_player_box_h_frac * frame_h
         for k in range(n):
@@ -396,9 +399,20 @@ def _observation_from_prediction(
                 velocity=_pair_at(velocities, k),
                 torso_hsv=torso_histogram(frame_bgr, (bbox.x, bbox.y, bbox.w, bbox.h)),
             ))
+            if ocr_src is None:
+                text = texts[k] if k < len(texts) else None
+                if text:  # workflow OCR emits text only when it has a read
+                    ocr.append(OcrRead(track_id=track_id, text=str(text), confidence=1.0))
+
+    if _detections_len(predictions.get("ocr_source")):
+        src = predictions["ocr_source"]
+        src_ids = getattr(src, "tracker_id", None)
+        texts = predictions.get("jersey_texts") or ()
+        for k in range(_detections_len(src)):
+            tid = _int_at(src_ids, k)
             text = texts[k] if k < len(texts) else None
-            if text:  # workflow OCR emits text only when it has a read
-                ocr.append(OcrRead(track_id=track_id, text=str(text), confidence=1.0))
+            if tid is not None and text:
+                ocr.append(OcrRead(track_id=tid, text=str(text), confidence=1.0))
 
     ball: BallObs | None = None
     ball_det = predictions.get("ball")
