@@ -292,15 +292,25 @@ def test_matching_ocr_votes_promote_to_target() -> None:
     assert labeled[0].evidence.get("ocr_pos") == 2.0
 
 
-def test_one_clean_matching_read_binds() -> None:
-    """User policy: bind number on first sighting when nothing conflicts."""
+def test_one_matching_read_alone_does_not_promote() -> None:
+    """Target promotion needs the confirmed pair: one read can be a misread,
+    and a misread must never steal the target box (numbers.py keeps reading
+    until two agree, so genuine binds always reach two)."""
     frames = frames_from(
         {i: [player(41, 500, 100)] for i in range(6)},
         {0: [OcrRead(41, "10", 0.6)]},
     )
     labeled = label_tracklets(build_tracklets(frames), spec(), frames, CFG)
+    assert labeled[0].label is IdentityLabel.UNKNOWN
+
+
+def test_two_agreeing_reads_promote() -> None:
+    frames = frames_from(
+        {i: [player(41, 500, 100)] for i in range(6)},
+        {0: [OcrRead(41, "10", 0.6)], 1: [OcrRead(41, "10", 0.7)]},
+    )
+    labeled = label_tracklets(build_tracklets(frames), spec(), frames, CFG)
     assert labeled[0].label is IdentityLabel.TARGET
-    assert labeled[0].confidence > 0.5
 
 
 def test_matching_read_with_conflict_stays_unknown() -> None:
@@ -458,7 +468,7 @@ def test_partial_digit_read_is_neutral_not_negative() -> None:
     frames = frames_from(
         {i: [player(41, 500, 100)] for i in range(6)},
         {0: [OcrRead(41, "1", 0.6)], 1: [OcrRead(41, "6", 0.6)],
-         2: [OcrRead(41, "16", 0.6)]},
+         2: [OcrRead(41, "16", 0.6)], 3: [OcrRead(41, "16", 0.7)]},
     )
     labeled = label_tracklets(build_tracklets(frames), spec(jersey="16"), frames, CFG)
-    assert labeled[0].label is IdentityLabel.TARGET  # the full read binds
+    assert labeled[0].label is IdentityLabel.TARGET  # partials neutral, pair binds

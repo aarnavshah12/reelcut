@@ -159,6 +159,8 @@ def bind_numbers(
             tid = p.track_id
             if tid in confirmed:
                 continue
+            if p.bbox.h < cfg.number_min_crop_h:
+                continue    # too small to read reliably; wait for a closer view
             if attempts_left.get(tid, cfg.number_max_attempts) <= 0:
                 continue
             if f.timestamp_s - last_attempt_ts.get(tid, -1e9) < min_gap_s:
