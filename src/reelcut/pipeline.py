@@ -377,10 +377,15 @@ def run_pipeline(
         tag = "_".join(c.reasons[:2]) if c.reasons else "clip"
         return f"clip{i + 1}_{c.start_s:.0f}s-{c.end_s:.0f}s_{tag}"
 
-    def _export_clip_files(source: Path, work_dir: Path, suffix: str) -> None:
+    def _export_clip_files(
+        source: Path, work_dir: Path, suffix: str, transcode: bool = False
+    ) -> None:
         """Per-clip files with human names in <out>/clips/ (parents never dig
-        in the cache for seg_XXX.mp4 again)."""
+        in the cache for seg_XXX.mp4 again). transcode=True re-encodes to
+        h264 — needed for the annotated cuts, whose mp4v source browsers
+        refuse to play."""
         import shutil
+        import subprocess
 
         clips_dir = paths.out_dir / "clips"
         clips_dir.mkdir(parents=True, exist_ok=True)
@@ -393,8 +398,19 @@ def run_pipeline(
         for old in clips_dir.glob(f"*{suffix}.mp4"):
             old.unlink()
         for i, (c, seg) in enumerate(zip(clips, expected)):
-            if seg.exists():
-                shutil.copy(seg, clips_dir / f"{_clip_stem(i, c)}{suffix}.mp4")
+            if not seg.exists():
+                continue
+            dest = clips_dir / f"{_clip_stem(i, c)}{suffix}.mp4"
+            if transcode:
+                subprocess.run(
+                    [ffmpeg.ffmpeg_exe(), "-y", "-loglevel", "error",
+                     "-i", str(seg), "-c:v", "libx264", "-crf", "20",
+                     "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                     str(dest)],
+                    check=True,
+                )
+            else:
+                shutil.copy(seg, dest)
 
     if video_exists and clips:
         _export_clip_files(video, cache.dir / "segments", "")
@@ -419,7 +435,7 @@ def run_pipeline(
                 )
                 _export_clip_files(
                     paths.debug_mp4, cache.dir / "segments_annotated",
-                    "_annotated",
+                    "_annotated", transcode=True,
                 )
             # browser/share-friendly h264 of the full annotated video (the
             # raw debug.mp4 is mp4v, which browsers refuse to play)

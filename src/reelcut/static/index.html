@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reelcut</title>
+<style>
+  :root { --violet: #7C3AED; --bg: #0f0f13; --card: #1a1a22; --text: #ececf1; --dim: #9a9aa8; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 26px; margin: 8px 0 2px; } h1 b { color: var(--violet); }
+  .sub { color: var(--dim); margin-bottom: 24px; }
+  .card { background: var(--card); border-radius: 14px; padding: 18px; margin-bottom: 18px; }
+  .card h2 { font-size: 16px; margin: 0 0 12px; }
+  .step-num { display: inline-block; background: var(--violet); border-radius: 50%; width: 22px; height: 22px; text-align: center; line-height: 22px; font-size: 13px; margin-right: 8px; }
+  button { background: var(--violet); color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: .4; cursor: default; }
+  button.ghost { background: #2a2a35; }
+  input, select { background: #12121a; color: var(--text); border: 1px solid #333; border-radius: 8px; padding: 9px 10px; font-size: 14px; }
+  video { width: 100%; border-radius: 10px; background: #000; }
+  #picker { position: relative; display: none; }
+  #picker canvas { width: 100%; border-radius: 10px; cursor: crosshair; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .hint { color: var(--dim); font-size: 13px; margin-top: 8px; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; color: #8fd18f; white-space: pre-wrap; background: #101410; border-radius: 8px; padding: 10px; min-height: 40px; }
+  .clipgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .clipgrid a { color: var(--violet); font-size: 13px; }
+  .hidden { display: none !important; }
+  progress { width: 100%; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>reel<b>cut</b></h1>
+  <div class="sub">Upload the game. Click your kid. Get their highlights.</div>
+
+  <div class="card" id="step1">
+    <h2><span class="step-num">1</span>Upload the game video</h2>
+    <input type="file" id="file" accept="video/mp4,video/quicktime">
+    <div class="row"><button id="uploadBtn">Upload</button><progress id="uploadProg" class="hidden" max="100"></progress></div>
+    <div class="hint" id="uploadHint"></div>
+  </div>
+
+  <div class="card hidden" id="step2">
+    <h2><span class="step-num">2</span>Find a moment where your kid is clearly visible</h2>
+    <video id="player" controls playsinline></video>
+    <div class="row">
+      <button id="pickBtn">Use this moment — find players</button>
+      <span class="hint" id="pickHint"></span>
+    </div>
+    <div id="picker"><canvas id="canvas"></canvas></div>
+  </div>
+
+  <div class="card hidden" id="step3">
+    <h2><span class="step-num">3</span>About your kid</h2>
+    <div class="row">
+      <input id="jersey" placeholder="Jersey number (e.g. 7)" size="16">
+      <select id="color">
+        <option value="">Kit color…</option>
+        <option>red</option><option>orange</option><option>yellow</option><option>green</option>
+        <option>blue</option><option>purple</option><option>pink</option><option>white</option><option>black</option>
+      </select>
+      <select id="maxclips">
+        <option value="0">All goal moments</option>
+        <option value="1">Best goal only</option>
+        <option value="2" selected>Top 2 goals</option>
+        <option value="3">Top 3 goals</option>
+      </select>
+      <button id="goBtn" disabled>Make my highlight reel</button>
+    </div>
+    <div class="hint">Pick your kid above first — the chosen box glows violet.</div>
+  </div>
+
+  <div class="card hidden" id="step4">
+    <h2><span class="step-num">4</span>Working…</h2>
+    <div id="log">waiting for job…</div>
+  </div>
+
+  <div class="card hidden" id="step5">
+    <h2><span class="step-num">5</span>Your highlights</h2>
+    <h3 style="font-size:14px">Highlight reel</h3>
+    <video id="reel" controls playsinline></video>
+    <h3 style="font-size:14px">Individual clips</h3>
+    <div class="clipgrid" id="clips"></div>
+    <h3 style="font-size:14px">Full game, annotated</h3>
+    <video id="fullvid" controls playsinline preload="none"></video>
+  </div>
+</div>
+
+<script>
+let videoId = null, boxes = [], chosen = -1, seedT = 0, frameW = 0, frameH = 0;
+const $ = (id) => document.getElementById(id);
+const show = (id) => $(id).classList.remove('hidden');
+
+$('uploadBtn').onclick = () => {
+  const f = $('file').files[0];
+  if (!f) { $('uploadHint').textContent = 'Choose a file first.'; return; }
+  const xhr = new XMLHttpRequest();
+  const form = new FormData(); form.append('file', f);
+  $('uploadProg').classList.remove('hidden');
+  xhr.upload.onprogress = (e) => { if (e.lengthComputable) $('uploadProg').value = 100 * e.loaded / e.total; };
+  xhr.onload = () => {
+    if (xhr.status !== 200) { $('uploadHint').textContent = 'Upload failed: ' + xhr.responseText; return; }
+    const r = JSON.parse(xhr.responseText);
+    videoId = r.video_id;
+    $('player').src = r.url;
+    $('uploadHint').textContent = `Uploaded — ${r.duration_s.toFixed(0)}s of video.`;
+    show('step2');
+  };
+  xhr.open('POST', '/api/videos'); xhr.send(form);
+};
+
+$('pickBtn').onclick = async () => {
+  const v = $('player'); v.pause();
+  seedT = v.currentTime;
+  $('pickHint').textContent = 'Finding players… (first time loads the model, ~20s)';
+  const r = await fetch(`/api/videos/${videoId}/detections?t=${seedT}`);
+  if (!r.ok) { $('pickHint').textContent = 'Detection failed.'; return; }
+  const d = await r.json();
+  boxes = d.players; frameW = d.frame_w; frameH = d.frame_h; chosen = -1;
+  $('pickHint').textContent = boxes.length ? `${boxes.length} players found — click your kid.` : 'No players found at this moment; scrub somewhere clearer.';
+  const img = new Image();
+  img.src = `/api/videos/${videoId}/frame.jpg?t=${seedT}`;
+  img.onload = () => { $('picker').style.display = 'block'; draw(img); show('step3'); };
+};
+
+function draw(img) {
+  const c = $('canvas'); c.width = frameW; c.height = frameH;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0, frameW, frameH);
+  boxes.forEach((b, i) => {
+    ctx.lineWidth = i === chosen ? 6 : 3;
+    ctx.strokeStyle = i === chosen ? '#7C3AED' : '#ffffffcc';
+    ctx.strokeRect(b.x, b.y, b.w, b.h);
+  });
+  c.onclick = (e) => {
+    const r = c.getBoundingClientRect();
+    const x = (e.clientX - r.left) * frameW / r.width;
+    const y = (e.clientY - r.top) * frameH / r.height;
+    let best = -1, bestArea = 1e18;
+    boxes.forEach((b, i) => {
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h && b.w * b.h < bestArea) { best = i; bestArea = b.w * b.h; }
+    });
+    if (best >= 0) { chosen = best; draw(img); $('goBtn').disabled = false; }
+  };
+}
+
+$('goBtn').onclick = async () => {
+  if (chosen < 0 || !$('jersey').value || !$('color').value) {
+    alert('Pick your kid, their jersey number, and kit color.'); return;
+  }
+  const b = boxes[chosen];
+  const form = new FormData();
+  form.append('video_id', videoId);
+  form.append('jersey', $('jersey').value.trim());
+  form.append('team_color', $('color').value);
+  form.append('seed_t', seedT);
+  form.append('seed_x', b.x); form.append('seed_y', b.y);
+  form.append('seed_w', b.w); form.append('seed_h', b.h);
+  form.append('max_goal_clips', $('maxclips').value);
+  const r = await fetch('/api/jobs', { method: 'POST', body: form });
+  if (!r.ok) { alert('Could not start: ' + await r.text()); return; }
+  const { job_id } = await r.json();
+  show('step4'); $('goBtn').disabled = true;
+  poll(job_id);
+};
+
+async function poll(jobId) {
+  const r = await fetch(`/api/jobs/${jobId}`);
+  const s = await r.json();
+  $('log').textContent = (s.log || []).join('\n') || (s.state + '…');
+  if (s.state === 'done') {
+    const res = s.results;
+    $('reel').src = res.highlights;
+    $('fullvid').src = res.annotated_full;
+    $('clips').innerHTML = '';
+    res.clips.filter(u => u.includes('_annotated')).forEach(u => {
+      const d = document.createElement('div');
+      const clean = u.replace('_annotated', '');
+      d.innerHTML = `<video controls playsinline preload="none" src="${u}"></video>
+                     <a href="${clean}" download>download clean</a> · <a href="${u}" download>download annotated</a>`;
+      $('clips').appendChild(d);
+    });
+    show('step5');
+  } else if (s.state === 'failed') {
+    $('log').textContent += '\n\nJOB FAILED — see above.';
+  } else {
+    setTimeout(() => poll(jobId), 3000);
+  }
+}
+</script>
+</body>
+</html>

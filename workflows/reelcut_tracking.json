@@ -44,8 +44,8 @@
         "referee": 0.4,
         "Referee": 0.4,
         "ref": 0.4,
-        "ball": 0.15,
-        "Ball": 0.15,
+        "ball": 0.4,
+        "Ball": 0.4,
         "goal": 0.15,
         "Goal": 0.15
       },
