@@ -227,6 +227,22 @@ def run_pipeline(
             print(f"[stage3] scores saturate timeline; threshold raised "
                   f"{cfg.event_threshold:.2f} -> {threshold:.2f}")
         events = scoring.extract_events(scores, threshold, cfg.event_min_s)
+        if threshold > cfg.event_threshold:
+            # A registered goal never loses to the reel budget: re-extract at
+            # the base threshold and keep any ball_in_goal events the raised
+            # bar dropped (plan_clips merges overlaps downstream).
+            goal_events = [
+                e for e in scoring.extract_events(
+                    scores, cfg.event_threshold, cfg.event_min_s
+                )
+                if "ball_in_goal" in e.tags
+            ]
+            seen = {(e.start_s, e.end_s) for e in events}
+            events = sorted(
+                events + [e for e in goal_events
+                          if (e.start_s, e.end_s) not in seen],
+                key=lambda e: e.start_s,
+            )
         cache.save(3, "scores", {"points": scores, "events": events})
     else:
         payload = cache.load(3, "scores")
