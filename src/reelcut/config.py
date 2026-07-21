@@ -83,8 +83,19 @@ class ReelcutConfig:
                                         # steal the violet target box
     number_min_crop_h: int = 60         # skip number attempts on crops shorter
                                         # than this (tiny crops = systematic misreads)
-    number_audit_gap_s: float = 4.0     # economy mode: min gap between audit reads
+    number_audit_gap_s: float = 2.0     # min gap between post-enrollment audit
+                                        # reads (both modes)
     number_audit_attempts: int = 3      # economy mode: max big-crop audit reads
+    number_overlap_iou: float = 0.35    # skip reads on players overlapping
+                                        # another player this much — two kids in
+                                        # one crop is where fused digits come from
+    number_flip_splits: bool = True     # 2 consecutive audits contradicting the
+                                        # enrolled number split the track: the
+                                        # remainder re-enrolls as a new player
+                                        # (recovers tracker handovers)
+    player_dedupe_iou: float = 0.65     # per-frame: drop the lower-confidence of
+                                        # two player boxes overlapping this much
+                                        # (duplicate tracks on one kid)
     number_continuous: bool = True      # enrollment mode: read every player at
                                         # every sampled frame until number_enroll_s
                                         # after their first successful read; the

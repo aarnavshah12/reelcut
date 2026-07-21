@@ -173,14 +173,37 @@ def test_continuous_mode_reads_every_sampled_frame(tiny_video):
     assert reader.calls == 10
 
 
-def test_continuous_reads_stop_after_enrollment(tiny_video):
-    """After 3s of successful reads the majority is locked and the digit
-    model stops running for that track — the tracker carries the number."""
+def test_continuous_reads_drop_to_sparse_audits_after_enrollment(tiny_video):
+    """After 3s of successful reads the majority is locked; only sparse
+    audit reads (handover watch) continue — the tracker carries the number."""
     reader = CountingReader([("7", 0.9)])
     frames = track_frames(n=40)             # 7.8s of track life at 5 fps
     _, bound = bind_numbers(frames, tiny_video, CONT, reader)
     assert bound == {5: "7"}
-    assert reader.calls == 16               # t=0.0 .. t=3.0 inclusive, then locked
+    # 16 enrollment reads (t=0..3.0) + audits at t=5.0 and t=7.0
+    assert reader.calls == 18
+
+
+def test_overlapping_players_are_not_read(tiny_video):
+    """Two kids in one crop is where fused digits come from — no reads while
+    boxes overlap heavily."""
+    reader = CountingReader([("7", 0.9)])
+    frames = [
+        make_frame(i, [player(5, 60, 60, h=100), player(9, 70, 60, h=100)])
+        for i in range(6)
+    ]
+    _, bound = bind_numbers(frames, tiny_video, CONT, reader)
+    assert reader.calls == 0 and bound == {}
+
+
+def test_separated_players_still_read(tiny_video):
+    reader = CountingReader([("7", 0.9)])
+    frames = [
+        make_frame(i, [player(5, 60, 60, h=100), player(9, 200, 60, h=100)])
+        for i in range(4)
+    ]
+    bind_numbers(frames, tiny_video, CONT, reader)
+    assert reader.calls == 8                # both kids, every frame
 
 
 def test_enrollment_clock_starts_at_first_successful_read(tiny_video):
@@ -329,3 +352,53 @@ def test_timeline_reentry_reenrolls_per_track():
     tl = number_timeline(frames)
     assert tl[5] == [(0, "7")]
     assert tl[9] == [(180, "13")]
+
+
+def test_flip_split_recovers_stolen_track():
+    """Tracker handover: enrolled '7', then audits read '8' twice -> the
+    track splits at the first contradiction and the tail re-enrolls."""
+    from reelcut.numbers import number_timeline, split_on_number_flips
+
+    frames = (
+        [make_frame(i, [player(5, 60, 60)], ocr=[_read(5, "7")]) for i in range(4)]
+        # enrollment window (3s) closes after i=15; audits contradict at i=25, 35
+        + [make_frame(25, [player(5, 60, 60)], ocr=[_read(5, "8")])]
+        + [make_frame(35, [player(5, 60, 60)], ocr=[_read(5, "8")])]
+        + [make_frame(36, [player(5, 60, 60)])]
+    )
+    out, n = split_on_number_flips(frames, CONT)
+    assert n == 1
+    new_ids = {p.track_id for f in out for p in f.players}
+    assert 5 in new_ids and len(new_ids) == 2
+    new_id = (new_ids - {5}).pop()
+    # observations from the first contradiction onward carry the new id
+    assert all(p.track_id == new_id for f in out if f.frame_index >= 150
+               for p in f.players)
+    tl = number_timeline(out)
+    assert tl[5] == [(0, "7")]
+    assert tl[new_id][0][1] == "8"          # tail re-enrolled as the 8 kid
+
+
+def test_flip_split_ignores_compatible_audits():
+    from reelcut.numbers import split_on_number_flips
+
+    frames = (
+        [make_frame(i, [player(5, 60, 60)], ocr=[_read(5, "7")]) for i in range(4)]
+        + [make_frame(25, [player(5, 60, 60)], ocr=[_read(5, "71")])]   # fusion
+        + [make_frame(35, [player(5, 60, 60)], ocr=[_read(5, "7")])]
+    )
+    _, n = split_on_number_flips(frames, CONT)
+    assert n == 0
+
+
+def test_flip_split_single_glitch_does_not_split():
+    from reelcut.numbers import split_on_number_flips
+
+    frames = (
+        [make_frame(i, [player(5, 60, 60)], ocr=[_read(5, "7")]) for i in range(4)]
+        + [make_frame(25, [player(5, 60, 60)], ocr=[_read(5, "8")])]
+        + [make_frame(35, [player(5, 60, 60)], ocr=[_read(5, "7")])]    # resets
+        + [make_frame(45, [player(5, 60, 60)], ocr=[_read(5, "8")])]
+    )
+    _, n = split_on_number_flips(frames, CONT)
+    assert n == 0

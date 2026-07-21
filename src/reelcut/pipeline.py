@@ -113,6 +113,10 @@ def run_pipeline(
     else:
         frames = cache.load(1, "observations")
 
+    # frame hygiene (applied after load so cached runs behave identically):
+    # duplicate boxes on one kid poison reads, votes, and rendering alike.
+    frames = stitching.dedupe_player_boxes(frames, cfg.player_dedupe_iou)
+
     n_frames = len(frames)
     ball_pct = (
         100.0 * sum(1 for f in frames if f.ball is not None) / n_frames
@@ -155,11 +159,15 @@ def run_pipeline(
                 for r in f.ocr[len(orig.ocr):]
             ]
             frames = enriched
+            n_splits = 0
+            if cfg.number_flip_splits and cfg.number_continuous:
+                frames, n_splits = numbers.split_on_number_flips(frames, cfg)
             n_confirmed = sum(1 for v in number_map.values() if not v.endswith("?"))
             _health(2, "numbers",
                     f"{n_confirmed} confirmed + "
                     f"{len(number_map) - n_confirmed} provisional numbers "
-                    f"({len(number_reads)} fresh reads)")
+                    f"({len(number_reads)} fresh reads, "
+                    f"{n_splits} handover splits)")
         tracklets = stitching.build_tracklets(frames)
         seed_track = stitching.find_seed_tracklet(tracklets, spec, frames)
         if seed_track is None:
@@ -225,6 +233,12 @@ def run_pipeline(
                 if f.frame_index in by_index else f
                 for f in frames
             ]
+            if cfg.number_flip_splits and cfg.number_continuous:
+                # deterministic replay of the same splits the computing run
+                # applied, so cached and fresh runs see identical frames
+                from . import numbers
+
+                frames, _ = numbers.split_on_number_flips(frames, cfg)
 
     n_target = sum(1 for t in labeled if t.label is IdentityLabel.TARGET)
     n_not = sum(1 for t in labeled if t.label is IdentityLabel.NOT_TARGET)

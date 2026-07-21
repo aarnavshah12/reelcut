@@ -472,3 +472,25 @@ def test_partial_digit_read_is_neutral_not_negative() -> None:
     )
     labeled = label_tracklets(build_tracklets(frames), spec(jersey="16"), frames, CFG)
     assert labeled[0].label is IdentityLabel.TARGET  # partials neutral, pair binds
+
+
+def test_dedupe_player_boxes_drops_overlapping_duplicate():
+    from fixtures import make_frame, player
+    from reelcut.stitching import dedupe_player_boxes
+
+    a = player(1, 100, 100, h=100)
+    dup = player(2, 102, 101, h=100)            # same kid, second track
+    far = player(3, 500, 100, h=100)
+    f = make_frame(0, [a, dup, far])
+    out = dedupe_player_boxes([f], iou=0.65)
+    ids = [p.track_id for p in out[0].players]
+    assert ids == [1, 3]                        # higher-confidence kept, order stable
+
+
+def test_dedupe_player_boxes_keeps_separated_players():
+    from fixtures import make_frame, player
+    from reelcut.stitching import dedupe_player_boxes
+
+    f = make_frame(0, [player(1, 100, 100), player(2, 300, 100)])
+    out = dedupe_player_boxes([f], iou=0.65)
+    assert len(out[0].players) == 2

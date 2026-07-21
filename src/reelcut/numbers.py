@@ -179,6 +179,82 @@ def number_timeline(
     return dict(out)
 
 
+def split_on_number_flips(
+    frames: list[FrameObservation], cfg: ReelcutConfig
+) -> tuple[list[FrameObservation], int]:
+    """Split tracks whose post-enrollment audits contradict their number.
+
+    A frozen label plus a jersey that suddenly reads a DIFFERENT number is
+    the signature of a tracker handover (BoT-SORT slid the box onto another
+    kid during a pile-up). Two consecutive contradicting audit reads split
+    the track at the first contradiction: every observation from that frame
+    on gets a fresh track id, which re-enrolls like any new player — exactly
+    the user's per-new-player rule applied to stolen tracks. Substring-
+    compatible reads (partials/fusions of the enrolled number) reset the
+    streak. Returns (frames with renamed observations, number of splits).
+    """
+    # replay each track's reads: enrolled value, then scan audits
+    by_track: dict[int, list[tuple[int, float, str]]] = defaultdict(list)
+    for f in frames:
+        for r in f.ocr:
+            digits = "".join(c for c in r.text if c.isdigit())
+            if digits:
+                by_track[r.track_id].append((f.frame_index, f.timestamp_s, digits))
+
+    max_id = max(
+        (p.track_id for f in frames for p in f.players), default=0
+    )
+    renames: dict[int, tuple[int, int]] = {}   # old_tid -> (split_frame, new_tid)
+    for tid, reads in by_track.items():
+        first_ts = reads[0][1]
+        window = [d for _, ts, d in reads if ts - first_ts <= cfg.number_enroll_s]
+        value, _ = merge_reads(window)
+        if value is None:
+            continue
+        streak: list[int] = []          # frame indices of contradicting reads
+        for fi, ts, digits in reads:
+            if ts - first_ts <= cfg.number_enroll_s:
+                continue
+            if digits == value or digits in value or value in digits:
+                streak = []
+            else:
+                streak.append(fi)
+                if len(streak) >= 2:
+                    max_id += 1
+                    renames[tid] = (streak[0], max_id)
+                    break
+        # only the FIRST handover per track is recovered; the renamed tail
+        # re-enrolls and would need its own audits for a second split — rare
+        # enough to leave to the next run of this same rule downstream.
+
+    if not renames:
+        return list(frames), 0
+
+    def fix_players(f: FrameObservation):
+        changed = False
+        players = []
+        for p in f.players:
+            r = renames.get(p.track_id)
+            if r is not None and f.frame_index >= r[0]:
+                players.append(replace(p, track_id=r[1]))
+                changed = True
+            else:
+                players.append(p)
+        ocr = []
+        for o in f.ocr:
+            r = renames.get(o.track_id)
+            if r is not None and f.frame_index >= r[0]:
+                ocr.append(replace(o, track_id=r[1]))
+                changed = True
+            else:
+                ocr.append(o)
+        if not changed:
+            return f
+        return replace(f, players=tuple(players), ocr=tuple(ocr))
+
+    return [fix_players(f) for f in frames], len(renames)
+
+
 def _existing_reads(frames: list[FrameObservation]) -> dict[int, list[str]]:
     seen: dict[int, list[str]] = defaultdict(list)
     for f in frames:
@@ -226,6 +302,13 @@ def bind_numbers(
             tid = p.track_id
             if p.bbox.h < cfg.number_min_crop_h:
                 continue    # too small to read reliably; wait for a closer view
+            if any(
+                q.track_id != tid
+                and p.bbox.iou(q.bbox) > cfg.number_overlap_iou
+                for q in f.players
+            ):
+                continue    # two kids in one crop is where fused digits come
+                            # from; wait until they separate
             if not cfg.number_continuous:
                 if scheduled.get(tid, 0) >= budget:
                     continue
@@ -255,12 +338,16 @@ def bind_numbers(
                         # continuous/enrollment mode: keep attempting until the
                         # first successful read, then read for number_enroll_s
                         # more; after that the majority is locked and the
-                        # tracker carries it (user-specified 3s vote design).
+                        # tracker carries it (user-specified 3s vote design) —
+                        # except sparse AUDIT reads, which watch for tracker
+                        # handovers (see split_on_number_flips).
                         if cfg.number_continuous:
                             enrolled_at = first_read_ts.get(tid)
                             if (
                                 enrolled_at is not None
                                 and ts - enrolled_at > cfg.number_enroll_s
+                                and ts - last_read_ts.get(tid, -1e9)
+                                < cfg.number_audit_gap_s
                             ):
                                 continue
                         # economy mode: confirmed tracks read again ONLY as

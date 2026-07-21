@@ -40,6 +40,37 @@ _CHAIN_MIN_PLAUSIBILITY = 0.3
 _MIN_JUNCTION_GAP_S = 0.25    # floor on the gap used to scale distance/speed
 
 
+def dedupe_player_boxes(
+    frames: list[FrameObservation], iou: float
+) -> list[FrameObservation]:
+    """Per frame, drop the lower-confidence of two player boxes overlapping
+    by more than ``iou``.
+
+    Pile-ups make the detector/tracker put two near-identical boxes on one
+    kid (measured: a '#8' and a '#2' box on the same player); every
+    downstream consumer — number reads, identity votes, rendering — is
+    better off seeing one player once. Returns a new list; input unmodified.
+    """
+    from dataclasses import replace as _replace
+
+    out: list[FrameObservation] = []
+    for f in frames:
+        if len(f.players) < 2:
+            out.append(f)
+            continue
+        keep = []
+        for p in sorted(f.players, key=lambda p: -p.confidence):
+            if all(p.bbox.iou(k.bbox) <= iou for k in keep):
+                keep.append(p)
+        if len(keep) == len(f.players):
+            out.append(f)
+        else:
+            order = {p.track_id: i for i, p in enumerate(f.players)}
+            keep.sort(key=lambda p: order[p.track_id])
+            out.append(_replace(f, players=tuple(keep)))
+    return out
+
+
 def build_tracklets(frames: list[FrameObservation]) -> list[Tracklet]:
     """Group per-frame PlayerObs into Tracklets by track_id.
 
