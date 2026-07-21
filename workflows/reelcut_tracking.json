@@ -234,9 +234,13 @@
       "predictions": "$steps.tracker.new_instances"
     },
     {
-      "type": "roboflow_core/ocr_model@v1",
+      "type": "roboflow_core/roboflow_object_detection_model@v2",
       "name": "ocr",
-      "images": "$steps.jersey_crops.crops"
+      "images": "$steps.jersey_crops.crops",
+      "model_id": "jersey-number-detection-8a55j-ob8fb/1",
+      "confidence": 0.3,
+      "iou_threshold": 0.4,
+      "max_detections": 6
     },
     {
       "type": "roboflow_core/stitch_ocr_detections@v2",
