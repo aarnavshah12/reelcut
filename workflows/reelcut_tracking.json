@@ -226,29 +226,6 @@
       "detections": "$steps.stabilizer.tracked_detections",
       "smoothing_alpha": 0.5,
       "pixels_per_meter": 1.0
-    },
-    {
-      "type": "roboflow_core/dynamic_crop@v1",
-      "name": "jersey_crops",
-      "images": "$inputs.image",
-      "predictions": "$steps.tracker.new_instances"
-    },
-    {
-      "type": "roboflow_core/roboflow_object_detection_model@v2",
-      "name": "ocr",
-      "images": "$steps.jersey_crops.crops",
-      "model_id": "jersey-number-detection-8a55j-ob8fb/1",
-      "confidence": 0.3,
-      "iou_threshold": 0.4,
-      "max_detections": 6
-    },
-    {
-      "type": "roboflow_core/stitch_ocr_detections@v2",
-      "name": "stitch_ocr",
-      "predictions": "$steps.ocr.predictions",
-      "stitching_algorithm": "tolerance",
-      "reading_direction": "left_to_right",
-      "tolerance": 10
     }
   ],
   "outputs": [
@@ -261,16 +238,6 @@
       "type": "JsonField",
       "name": "ball",
       "selector": "$steps.ball.predictions"
-    },
-    {
-      "type": "JsonField",
-      "name": "jersey_texts",
-      "selector": "$steps.stitch_ocr.ocr_text"
-    },
-    {
-      "type": "JsonField",
-      "name": "ocr_source",
-      "selector": "$steps.tracker.new_instances"
     },
     {
       "type": "JsonField",
