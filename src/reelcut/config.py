@@ -69,7 +69,9 @@ class ReelcutConfig:
 
     # identity stitching
     ocr_pos_confidence: float = 0.4     # OCR conf needed to count a jersey read
-    ocr_pos_votes: int = 2              # matching reads to call tracklet TARGET
+    ocr_pos_votes: int = 1              # matching reads to call tracklet TARGET
+                                        # (1 = bind on first sighting; a track
+                                        # with any conflicting read never binds)
     ocr_neg_votes: int = 2              # confident different-number reads to call NOT_TARGET
     color_veto_dist: float = 0.75       # histogram distance beyond which team color vetoes
     max_plausible_speed: float = 8.0    # player-heights/s; faster linking = implausible

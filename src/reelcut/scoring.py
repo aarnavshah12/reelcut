@@ -443,7 +443,15 @@ def adaptive_threshold(
     if covered <= max_fraction:
         return base_threshold
     k = min(n - 1, max(0, int(round((1.0 - target_fraction) * n))))
-    return max(base_threshold, scores[k])
+    t = max(base_threshold, scores[k])
+    # Tied scores can leave coverage far above target; step up to the next
+    # distinct score. (A fully uniform saturated timeline then yields no
+    # events — no meaningful "top moments" exist in that degenerate case.)
+    if sum(1 for s in scores if s >= t) / n > max_fraction:
+        higher = [s for s in scores if s > t]
+        if higher:
+            t = higher[0]
+    return t
 
 
 def smooth_scores(

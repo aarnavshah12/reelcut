@@ -240,7 +240,11 @@ def label_tracklets(
             labeled = LabeledTracklet(
                 tracklet, IdentityLabel.NOT_TARGET, 0.0, {"color": color_dist}
             )
-        elif pos >= cfg.ocr_pos_votes:
+        elif pos >= cfg.ocr_pos_votes and neg == 0:
+            # neg == 0 guard: a track that ALSO read a different number never
+            # binds on jersey evidence — matters most at ocr_pos_votes == 1
+            # (bind-on-first-sighting), where one misread must not be enough
+            # to claim a track while a conflicting read is present.
             labeled = LabeledTracklet(
                 tracklet,
                 IdentityLabel.TARGET,

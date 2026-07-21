@@ -292,10 +292,22 @@ def test_matching_ocr_votes_promote_to_target() -> None:
     assert labeled[0].evidence.get("ocr_pos") == 2.0
 
 
-def test_one_matching_read_stays_unknown() -> None:
+def test_one_clean_matching_read_binds() -> None:
+    """User policy: bind number on first sighting when nothing conflicts."""
     frames = frames_from(
         {i: [player(41, 500, 100)] for i in range(6)},
         {0: [OcrRead(41, "10", 0.6)]},
+    )
+    labeled = label_tracklets(build_tracklets(frames), spec(), frames, CFG)
+    assert labeled[0].label is IdentityLabel.TARGET
+    assert labeled[0].confidence > 0.5
+
+
+def test_matching_read_with_conflict_stays_unknown() -> None:
+    """A track that ALSO read a different number never binds on one sighting."""
+    frames = frames_from(
+        {i: [player(41, 500, 100)] for i in range(6)},
+        {0: [OcrRead(41, "10", 0.6)], 1: [OcrRead(41, "7", 0.6)]},
     )
     labeled = label_tracklets(build_tracklets(frames), spec(), frames, CFG)
     assert labeled[0].label is IdentityLabel.UNKNOWN
