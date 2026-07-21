@@ -178,7 +178,14 @@ def run_pipeline(
             opportunities = scoring.score_opportunities(interp_frames, cfg)
             raw = scoring.blend_scores(raw, opportunities, cfg.fallback_weight)
         scores = scoring.smooth_scores(raw, cfg.smooth_window_s)
-        events = scoring.extract_events(scores, cfg.event_threshold, cfg.event_min_s)
+        threshold = scoring.adaptive_threshold(
+            scores, cfg.event_threshold,
+            cfg.target_reel_fraction, cfg.max_reel_fraction,
+        )
+        if threshold > cfg.event_threshold:
+            print(f"[stage3] scores saturate timeline; threshold raised "
+                  f"{cfg.event_threshold:.2f} -> {threshold:.2f}")
+        events = scoring.extract_events(scores, threshold, cfg.event_min_s)
         cache.save(3, "scores", {"points": scores, "events": events})
     else:
         payload = cache.load(3, "scores")

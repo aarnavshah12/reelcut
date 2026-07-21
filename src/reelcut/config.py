@@ -88,6 +88,13 @@ class ReelcutConfig:
     event_min_s: float = 1.0
     ball_gap_interp_max_s: float = 1.5  # interpolate ball across gaps up to this
 
+    # reel budget: if events would cover more than max_reel_fraction of the
+    # source, the event threshold rises until coverage ~ target_reel_fraction.
+    # Guards against any saturating score signal (e.g. goal boxes everywhere
+    # in close-up small-sided footage).
+    target_reel_fraction: float = 0.12
+    max_reel_fraction: float = 0.20
+
     # clip cutting
     clip_pad_s: float = 4.0
     clip_merge_gap_s: float = 3.0

@@ -346,12 +346,15 @@ def score_opportunities(
     points: list[ScorePoint] = []
     for i, frame in enumerate(frames):
         ball = frame.ball
-        if ball is None or not frame.goal_boxes:
+        # A "goal" taller than half the frame is a hallucination or a
+        # camera-inside-the-goal shot, not a target to shoot at.
+        goal_boxes = [g for g in frame.goal_boxes if g.h <= 0.5 * frame.frame_h]
+        if ball is None or not goal_boxes:
             points.append(ScorePoint(frame_ts[i], 0.0, ()))
             continue
         bx, by = ball.bbox.cx, ball.bbox.cy
         best = None  # (normalized distance, goal height)
-        for goal in frame.goal_boxes:
+        for goal in goal_boxes:
             gh = max(goal.h, 1.0)
             dx = max(goal.x - bx, 0.0, bx - goal.x2)
             dy = max(goal.y - by, 0.0, by - goal.y2)
@@ -416,6 +419,31 @@ def blend_scores(
             tags = tuple(sorted(set(p.tags) | set(match.tags)))
             out.append(ScorePoint(p.timestamp_s, max(p.score, weighted), tags))
     return out
+
+
+def adaptive_threshold(
+    points: list[ScorePoint],
+    base_threshold: float,
+    target_fraction: float,
+    max_fraction: float,
+) -> float:
+    """Raise the event threshold when scores saturate the timeline.
+
+    If the fraction of points at/above ``base_threshold`` exceeds
+    ``max_fraction``, return the score quantile that keeps roughly
+    ``target_fraction`` of the timeline (never below ``base_threshold``);
+    otherwise return ``base_threshold`` unchanged. Points are sampled on a
+    uniform grid, so point fraction ~ timeline fraction.
+    """
+    if not points:
+        return base_threshold
+    scores = sorted(p.score for p in points)
+    n = len(scores)
+    covered = sum(1 for s in scores if s >= base_threshold) / n
+    if covered <= max_fraction:
+        return base_threshold
+    k = min(n - 1, max(0, int(round((1.0 - target_fraction) * n))))
+    return max(base_threshold, scores[k])
 
 
 def smooth_scores(
