@@ -165,12 +165,22 @@ def test_continuous_mode_is_default():
 
 
 def test_continuous_mode_reads_every_sampled_frame(tiny_video):
-    """User design: the number model is ALWAYS on — one attempt per player
-    per sampled frame, no cadence gate."""
+    """User design: every sampled frame is read during enrollment — no
+    cadence gate (10 samples here span 1.8s, inside the 3s window)."""
     reader = CountingReader([("7", 0.9)])
     frames = track_frames(n=10)
     bind_numbers(frames, tiny_video, CONT, reader)
     assert reader.calls == 10
+
+
+def test_continuous_reads_stop_after_enrollment(tiny_video):
+    """After 3s of successful reads the majority is locked and the digit
+    model stops running for that track — the tracker carries the number."""
+    reader = CountingReader([("7", 0.9)])
+    frames = track_frames(n=40)             # 7.8s of track life at 5 fps
+    _, bound = bind_numbers(frames, tiny_video, CONT, reader)
+    assert bound == {5: "7"}
+    assert reader.calls == 16               # t=0.0 .. t=3.0 inclusive, then locked
 
 
 def test_concatenation_never_hijacks_majority():
@@ -240,7 +250,7 @@ def test_timeline_partial_read_confirms_instead_of_flipping():
     assert number_timeline(frames) == {5: [(0, "16")]}
 
 
-def test_timeline_superstring_upgrade_needs_two_reads():
+def test_timeline_superstring_upgrade():
     from reelcut.numbers import number_timeline
 
     frames = [
@@ -248,7 +258,8 @@ def test_timeline_superstring_upgrade_needs_two_reads():
         make_frame(1, [player(5, 60, 60)], ocr=[_read(5, "16")]),
         make_frame(2, [player(5, 60, 60)], ocr=[_read(5, "16")]),
     ]
-    assert number_timeline(frames) == {5: [(0, "1"), (12, "16")]}
+    # "1" and "16" agree (substring); tie broken toward the longer read
+    assert number_timeline(frames) == {5: [(0, "1"), (6, "16")]}
 
 
 def test_timeline_fusion_burst_is_outvoted_by_surrounding_clean_reads():
@@ -278,21 +289,31 @@ def test_timeline_recovers_when_fusion_lands_first():
     assert number_timeline(frames) == {5: [(0, "71"), (12, "7")]}
 
 
-def test_timeline_old_reads_age_out_of_the_window():
-    """Stolen-track recovery: after the tracker hands the box to a different
-    kid, the old kid's reads expire from the window and the new number takes
-    over without needing to outnumber the whole history."""
+def test_timeline_label_frozen_after_enrollment():
+    """User-specified: the 3s enrollment majority IS the track's number for
+    life — later conflicting reads never flicker the label."""
     from reelcut.numbers import number_timeline
 
-    reads = ["7"] * 20 + ["13"] * 10
+    reads = ["7"] * 20 + ["13"] * 10       # "13"s arrive after t=3s: ignored
     frames = [
         make_frame(i, [player(5, 60, 60)], ocr=[_read(5, r)])
         for i, r in enumerate(reads)
     ]
-    # The 3s window holds ~15 reads at this 5 fps grid: the "7"s age out as
-    # "13"s accumulate, so the flip happens mid-window (~9 reads in), not
-    # after the full 20-read history is outnumbered.
-    transitions = number_timeline(frames)[5]
-    assert transitions[0] == (0, "7")
-    assert transitions[-1][1] == "13"
-    assert transitions[-1][0] <= 28 * 6     # flipped before the "13"s ran out
+    assert number_timeline(frames) == {5: [(0, "7")]}
+
+
+def test_timeline_reentry_reenrolls_per_track():
+    """A player who left the frame comes back as a NEW track id and enrolls
+    from scratch — every individual player gets their own 3s vote."""
+    from reelcut.numbers import number_timeline
+
+    frames = [
+        make_frame(i, [player(5, 60, 60)], ocr=[_read(5, "7")])
+        for i in range(3)
+    ] + [
+        make_frame(30 + i, [player(9, 60, 60)], ocr=[_read(9, "13")])
+        for i in range(3)
+    ]
+    tl = number_timeline(frames)
+    assert tl[5] == [(0, "7")]
+    assert tl[9] == [(180, "13")]

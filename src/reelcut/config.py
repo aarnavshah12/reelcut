@@ -85,10 +85,14 @@ class ReelcutConfig:
                                         # than this (tiny crops = systematic misreads)
     number_audit_gap_s: float = 4.0     # economy mode: min gap between audit reads
     number_audit_attempts: int = 3      # economy mode: max big-crop audit reads
-    number_continuous: bool = True      # always-on: read every player at every
-                                        # sampled frame; display carries the
-                                        # last-read number per track
-                                        # (False = old stop-at-lock economy mode)
+    number_continuous: bool = True      # enrollment mode: read every player at
+                                        # every sampled frame until number_enroll_s
+                                        # after their first successful read; the
+                                        # majority becomes the track's number for
+                                        # life (False = old stop-at-lock economy)
+    number_enroll_s: float = 3.0        # user-specified: vote window per new
+                                        # track; label frozen after (a re-entering
+                                        # player is a new track and re-enrolls)
     ocr_neg_votes: int = 2              # confident different-number reads to call NOT_TARGET
 
     # appearance re-ID: CLIP embeddings of player crops vs a reference bank
@@ -123,6 +127,14 @@ class ReelcutConfig:
     goal_box_hold_s: float = 2.5        # carry goal boxes across detection
                                         # dropouts (players occlude the goal
                                         # exactly when shots happen)
+
+    # goal-only reel: clips are chosen ONLY around goal-mouth transients
+    # (ball inside a goal box at speed). Trimmed to lead/tail around the
+    # transient so the reel is goals, not connective tissue.
+    goal_only_reel: bool = True
+    goal_event_lead_s: float = 5.0      # buildup kept before the transient
+    goal_event_tail_s: float = 3.0      # celebration kept after it
+    goal_transient_score: float = 0.6   # raw goal_mouth score that counts
 
     # involvement
     smooth_window_s: float = 2.0

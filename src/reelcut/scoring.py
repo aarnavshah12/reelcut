@@ -520,6 +520,40 @@ def smooth_scores(
     return out
 
 
+def goal_only_events(
+    events: list[InvolvementEvent],
+    raw_points: list[ScorePoint],
+    lead_s: float,
+    tail_s: float,
+    min_peak: float,
+) -> list[InvolvementEvent]:
+    """Keep only events containing a goal-mouth transient, trimmed around it.
+
+    A transient is a RAW (pre-smoothing) point with score >= min_peak and a
+    "goal_mouth" tag: the ball inside a goal box at speed. Events without one
+    are dropped; events with one are trimmed to [first transient - lead_s,
+    last transient + tail_s] so the reel is goals plus buildup, not the whole
+    above-threshold neighborhood. The action gate in score_opportunities is
+    what keeps slow 2D ball-over-net overlaps (depth illusions) from counting
+    as transients in the first place.
+    """
+    out: list[InvolvementEvent] = []
+    for e in events:
+        ts = [
+            p.timestamp_s for p in raw_points
+            if p.score >= min_peak and "goal_mouth" in p.tags
+            and e.start_s <= p.timestamp_s <= e.end_s
+        ]
+        if not ts:
+            continue
+        out.append(replace(
+            e,
+            start_s=max(e.start_s, min(ts) - lead_s),
+            end_s=min(e.end_s, max(ts) + tail_s),
+        ))
+    return out
+
+
 def extract_events(
     points: list[ScorePoint], threshold: float, min_duration_s: float
 ) -> list[InvolvementEvent]:

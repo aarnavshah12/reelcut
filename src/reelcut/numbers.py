@@ -1,11 +1,11 @@
 """Stage 1.5 — jersey-number binding over tracklets.
 
-Continuous mode (default), per the user's design: the digit model is ALWAYS
-on — every tracked player, every sampled frame. Each track's displayed
-number is the last one read off that jersey, carried unchanged while the
-number is unreadable (orientation, occlusion) and replaced when a different
-number is read twice (see :func:`number_timeline`). Identity-level decisions
-use the weighted whole-track consensus (:func:`merge_reads`).
+Continuous mode (default), per the user's enrollment design: every new
+track is read at every sampled frame until ``number_enroll_s`` after its
+first successful read; the majority of that window becomes the track's
+number for life and reads stop (the tracker carries identity; a returning
+player is a new track and re-enrolls). See :func:`number_timeline`.
+Identity-level decisions use the weighted consensus (:func:`merge_reads`).
 
 Economy mode (``number_continuous=False``): cadenced attempts until two reads
 agree, then sparse big-crop audits only.
@@ -145,28 +145,21 @@ def merge_reads(
 
 def number_timeline(
     frames: list[FrameObservation],
-    window_s: float = 3.0,
+    enroll_s: float = 3.0,
 ) -> dict[int, list[tuple[int, str]]]:
-    """Per-track carried display labels: track_id -> [(frame_index, label)].
+    """Per-track display labels: track_id -> [(frame_index, label)].
 
-    The user-specified semantics: every player wears the number last read off
-    their jersey. The first successful read labels the track immediately; the
-    label then CARRIES unchanged while the jersey is unreadable (player turned
-    away), and updates when fresh reads disagree.
-
-    The label is the most-frequent read within the trailing ``window_s`` of
-    reads (ties: the incumbent keeps the label; among challengers, longer
-    wins). A time-boxed vote has no absorbing states — every failure mode
-    self-corrects within ~window_s of honest reads: a one-frame glitch never
-    outvotes the window; a fused "71" burst while two kids overlap is
-    outvoted by surrounding clean "7"s; a track the tracker handed to a
-    different kid flips to the new kid's number as the old reads age out.
-    (A fixed count of confirming reads instead of a time window would break
-    at high sample rates, where any burst is many consecutive reads.)
+    The user-specified enrollment design: from a track's FIRST successful
+    read, reads vote for ``enroll_s`` seconds; the majority (substring-aware
+    frequency via merge_reads) is the track's number for the rest of its
+    life — the tracker carries it, and reads after the window are ignored,
+    so a label can never flicker mid-track. A player who leaves the frame
+    comes back as a NEW track and re-enrolls from scratch. During the window
+    the running vote is shown, so labels appear on the first read instead of
+    3 seconds late.
     """
-    from collections import Counter, deque
-
-    hist: dict[int, deque[tuple[float, str]]] = defaultdict(deque)
+    pools: dict[int, list[str]] = defaultdict(list)
+    first_ts: dict[int, float] = {}
     cur: dict[int, str] = {}
     out: dict[int, list[tuple[int, str]]] = defaultdict(list)
     for f in frames:
@@ -175,22 +168,14 @@ def number_timeline(
             if not digits:
                 continue
             tid = r.track_id
-            h = hist[tid]
-            h.append((f.timestamp_s, digits))
-            while h and f.timestamp_s - h[0][0] > window_s:
-                h.popleft()
-            support = Counter(d for _, d in h)
-            incumbent = cur.get(tid)
-            best = max(support, key=lambda v: (support[v], len(v)))
-            if incumbent is None:
-                new = best
-            elif best != incumbent and support[best] > support.get(incumbent, 0):
-                new = best
-            else:
-                new = incumbent
-            if new != incumbent:
-                out[tid].append((f.frame_index, new))
-                cur[tid] = new
+            started = first_ts.setdefault(tid, f.timestamp_s)
+            if f.timestamp_s - started > enroll_s:
+                continue    # enrollment closed: the tracker owns the label now
+            pools[tid].append(digits)
+            value, _ = merge_reads(pools[tid])
+            if value is not None and value != cur.get(tid):
+                out[tid].append((f.frame_index, value))
+                cur[tid] = value
     return dict(out)
 
 
@@ -253,6 +238,7 @@ def bind_numbers(
     new_reads: dict[int, list[OcrRead]] = defaultdict(list)   # frame_index -> reads
     audits_used: dict[int, int] = {}
     last_read_ts: dict[int, float] = {}
+    first_read_ts: dict[int, float] = {}   # enrollment clock per track
     if plan and video.exists():
         cap = cv2.VideoCapture(str(video))
         try:
@@ -266,10 +252,20 @@ def bind_numbers(
                 if src_idx == pending[pi]:
                     fh, fw = img.shape[:2]
                     for tid, bbox, ts in plan[src_idx]:
+                        # continuous/enrollment mode: keep attempting until the
+                        # first successful read, then read for number_enroll_s
+                        # more; after that the majority is locked and the
+                        # tracker carries it (user-specified 3s vote design).
+                        if cfg.number_continuous:
+                            enrolled_at = first_read_ts.get(tid)
+                            if (
+                                enrolled_at is not None
+                                and ts - enrolled_at > cfg.number_enroll_s
+                            ):
+                                continue
                         # economy mode: confirmed tracks read again ONLY as
-                        # sparse big-crop audits. Continuous mode: no lock —
-                        # every scheduled read feeds the consensus.
-                        if not cfg.number_continuous and is_confirmed(tid):
+                        # sparse big-crop audits.
+                        elif is_confirmed(tid):
                             if (
                                 bbox.h < big_h
                                 or audits_used.get(tid, 0) >= cfg.number_audit_attempts
@@ -286,6 +282,7 @@ def bind_numbers(
                         last_read_ts[tid] = ts
                         if result is not None and result[0]:
                             number, conf = result
+                            first_read_ts.setdefault(tid, ts)
                             weight = 2.0 if bbox.h >= big_h else 1.0
                             pools.setdefault(tid, []).append((number, weight))
                             new_reads[src_idx].append(

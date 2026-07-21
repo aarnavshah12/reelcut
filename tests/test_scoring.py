@@ -233,3 +233,36 @@ def test_giant_hallucinated_box_does_not_evict_held_goal():
     out = persist_goal_boxes(frames, hold_s=2.5)
     assert out[2].goal_boxes == (real,)
     assert out[3].goal_boxes == (real,)
+
+
+# --------------------------------------------------------------------------- #
+# goal_only_events
+# --------------------------------------------------------------------------- #
+
+def test_goal_only_events_trims_and_drops():
+    from reelcut.scoring import goal_only_events
+    from reelcut.types import InvolvementEvent
+
+    raw = [
+        ScorePoint(12.0, 0.70, ("goal_chance", "goal_mouth")),
+        ScorePoint(13.0, 0.65, ("goal_chance", "goal_mouth")),
+        ScorePoint(26.0, 0.70, ("near_ball",)),        # fast but not at a goal
+        ScorePoint(2.0, 0.40, ("goal_mouth",)),        # at the goal but slow
+    ]
+    with_goal = InvolvementEvent(0.0, 20.0, 0.9, 0.5, ("goal_chance",))
+    without = InvolvementEvent(25.0, 30.0, 0.5, 0.4, ("near_ball",))
+    out = goal_only_events([with_goal, without], raw,
+                           lead_s=5.0, tail_s=3.0, min_peak=0.6)
+    assert len(out) == 1
+    assert out[0].start_s == 7.0            # 12 - 5 lead
+    assert out[0].end_s == 16.0             # 13 + 3 tail
+
+
+def test_goal_only_events_never_grows_the_event():
+    from reelcut.scoring import goal_only_events
+    from reelcut.types import InvolvementEvent
+
+    raw = [ScorePoint(10.0, 0.9, ("goal_mouth",))]
+    tight = InvolvementEvent(9.0, 11.0, 0.9, 0.9, ("goal_mouth",))
+    out = goal_only_events([tight], raw, lead_s=5.0, tail_s=3.0, min_peak=0.6)
+    assert out[0].start_s == 9.0 and out[0].end_s == 11.0

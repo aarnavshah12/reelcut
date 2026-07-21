@@ -270,7 +270,8 @@ def run_pipeline(
             # score_opportunities keeps static loitering out of this lane.
             def has_goal_transient(e: InvolvementEvent) -> bool:
                 return any(
-                    p.score >= 0.6 and "goal_mouth" in p.tags
+                    p.score >= cfg.goal_transient_score
+                    and "goal_mouth" in p.tags
                     and e.start_s <= p.timestamp_s <= e.end_s
                     for p in raw
                 )
@@ -287,6 +288,22 @@ def run_pipeline(
                           if (e.start_s, e.end_s) not in seen],
                 key=lambda e: e.start_s,
             )
+        if cfg.goal_only_reel:
+            goal_evts = scoring.goal_only_events(
+                events, raw, cfg.goal_event_lead_s, cfg.goal_event_tail_s,
+                cfg.goal_transient_score,
+            )
+            if goal_evts:
+                _health(3, "goals",
+                        f"goal-only reel: {len(goal_evts)} goal events kept "
+                        f"of {len(events)} candidates")
+                events = goal_evts
+            else:
+                # no goals in this footage: an empty reel helps nobody, so
+                # the involvement events stand
+                _health(3, "goals",
+                        f"goal-only reel: no goal transients found; keeping "
+                        f"{len(events)} involvement events")
         cache.save(3, "scores", {"points": scores, "events": events})
     else:
         payload = cache.load(3, "scores")
