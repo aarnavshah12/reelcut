@@ -1,16 +1,17 @@
-"""Stage 1.5 — jersey-number binding over tracklets (read-until-bound).
+"""Stage 1.5 — jersey-number binding over tracklets.
 
-The user-specified semantics: a tracked player with no bound number gets
-digit-model attempts spread across their track's lifetime; the FIRST clean
-read binds the number to that track for good and attempts stop — the tracker
-carries the identity from there. When the player leaves the frame the track
-dies; their next track repeats the process.
+Continuous mode (default), per the user's design: the digit model is ALWAYS
+on — every tracked player, every sampled frame. Each track's displayed
+number is the last one read off that jersey, carried unchanged while the
+number is unreadable (orientation, occlusion) and replaced when a different
+number is read twice (see :func:`number_timeline`). Identity-level decisions
+use the weighted whole-track consensus (:func:`merge_reads`).
+
+Economy mode (``number_continuous=False``): cadenced attempts until two reads
+agree, then sparse big-crop audits only.
 
 This runs locally over stage-1 observations (works identically for local and
-batch-GPU stage 1), decoding the source video in ONE sequential pass and
-evaluating only the attempts that are due, skipping every track already
-bound. Cost is bounded: at most ``number_max_attempts`` reads per tracklet,
-zero after a successful bind.
+batch-GPU stage 1), decoding the source video in ONE sequential pass.
 """
 from __future__ import annotations
 
@@ -104,6 +105,12 @@ def merge_reads(
     single read's weight. Confirmed = strength >= 2 and strictly leading.
     A lone weak group is provisional; unresolved conflicts return None,
     because a wrong lock is worse than no label.
+
+    The group's VALUE is its most-supported exact read (summed weight), with
+    longer winning only actual ties. Picking the longest outright let one
+    "71" concatenation (a neighbor's digit fused onto a clean "7") hijack a
+    track full of correct "7" reads; frequency keeps the real number while a
+    genuine partial-then-full pair ("1" then "16") still upgrades on the tie.
     """
     if not reads:
         return None, False
@@ -122,7 +129,10 @@ def merge_reads(
 
     groups.sort(key=rank, reverse=True)
     best = groups[0]
-    value = max((v for v, _ in best), key=len)
+    support: dict[str, float] = {}
+    for v, w in best:
+        support[v] = support.get(v, 0.0) + w
+    value = max(support, key=lambda v: (support[v], len(v)))
     if len(groups) > 1 and rank(best) == rank(groups[1]):
         return None, False               # dead tie between rivals: no label
     strength, _ = rank(best)
@@ -131,6 +141,57 @@ def merge_reads(
     if len(groups) == 1 and len(best) == 1:
         return value, False              # one weak read: provisional, keep trying
     return None, False                   # weak leader amid conflict: no label
+
+
+def number_timeline(
+    frames: list[FrameObservation],
+    window_s: float = 3.0,
+) -> dict[int, list[tuple[int, str]]]:
+    """Per-track carried display labels: track_id -> [(frame_index, label)].
+
+    The user-specified semantics: every player wears the number last read off
+    their jersey. The first successful read labels the track immediately; the
+    label then CARRIES unchanged while the jersey is unreadable (player turned
+    away), and updates when fresh reads disagree.
+
+    The label is the most-frequent read within the trailing ``window_s`` of
+    reads (ties: the incumbent keeps the label; among challengers, longer
+    wins). A time-boxed vote has no absorbing states — every failure mode
+    self-corrects within ~window_s of honest reads: a one-frame glitch never
+    outvotes the window; a fused "71" burst while two kids overlap is
+    outvoted by surrounding clean "7"s; a track the tracker handed to a
+    different kid flips to the new kid's number as the old reads age out.
+    (A fixed count of confirming reads instead of a time window would break
+    at high sample rates, where any burst is many consecutive reads.)
+    """
+    from collections import Counter, deque
+
+    hist: dict[int, deque[tuple[float, str]]] = defaultdict(deque)
+    cur: dict[int, str] = {}
+    out: dict[int, list[tuple[int, str]]] = defaultdict(list)
+    for f in frames:
+        for r in f.ocr:
+            digits = "".join(c for c in r.text if c.isdigit())
+            if not digits:
+                continue
+            tid = r.track_id
+            h = hist[tid]
+            h.append((f.timestamp_s, digits))
+            while h and f.timestamp_s - h[0][0] > window_s:
+                h.popleft()
+            support = Counter(d for _, d in h)
+            incumbent = cur.get(tid)
+            best = max(support, key=lambda v: (support[v], len(v)))
+            if incumbent is None:
+                new = best
+            elif best != incumbent and support[best] > support.get(incumbent, 0):
+                new = best
+            else:
+                new = incumbent
+            if new != incumbent:
+                out[tid].append((f.frame_index, new))
+                cur[tid] = new
+    return dict(out)
 
 
 def _existing_reads(frames: list[FrameObservation]) -> dict[int, list[str]]:
@@ -167,30 +228,26 @@ def bind_numbers(
     def is_confirmed(tid: int) -> bool:
         return merge_reads(pools.get(tid, []))[1]
 
-    # attempt plan: frame_index -> [(track_id, bbox)]. Unconfirmed tracks get
-    # the normal schedule; CONFIRMED tracks still get sparse audit attempts at
-    # high-quality moments only (big crop), so a clear look can overturn a
-    # lock formed from squints.
+    # attempt plan: frame_index -> [(track_id, bbox)]. Continuous mode reads
+    # EVERY player at EVERY sampled frame (the model is always on; the live
+    # label carries between successful reads). Economy mode: cadenced,
+    # budgeted attempts, with sparse big-crop audits after confirmation.
     plan: dict[int, list] = defaultdict(list)
     scheduled: dict[int, int] = {}
     last_planned_ts: dict[int, float] = {}
-    # continuous mode: read at cadence for the track's whole life (the vote
-    # converges as evidence accumulates); economy mode: bounded attempts.
-    budget = (
-        10**9 if cfg.number_continuous
-        else cfg.number_max_attempts + cfg.number_audit_attempts
-    )
+    budget = cfg.number_max_attempts + cfg.number_audit_attempts
     for f in frames:
         for p in f.players:
             tid = p.track_id
             if p.bbox.h < cfg.number_min_crop_h:
                 continue    # too small to read reliably; wait for a closer view
-            if scheduled.get(tid, 0) >= budget:
-                continue
-            if f.timestamp_s - last_planned_ts.get(tid, -1e9) < min_gap_s:
-                continue
-            scheduled[tid] = scheduled.get(tid, 0) + 1
-            last_planned_ts[tid] = f.timestamp_s
+            if not cfg.number_continuous:
+                if scheduled.get(tid, 0) >= budget:
+                    continue
+                if f.timestamp_s - last_planned_ts.get(tid, -1e9) < min_gap_s:
+                    continue
+                scheduled[tid] = scheduled.get(tid, 0) + 1
+                last_planned_ts[tid] = f.timestamp_s
             plan[f.frame_index].append((tid, p.bbox, f.timestamp_s))
 
     new_reads: dict[int, list[OcrRead]] = defaultdict(list)   # frame_index -> reads

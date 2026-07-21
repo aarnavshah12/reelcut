@@ -175,3 +175,61 @@ def test_extract_events_valleys_and_min_duration():
 
 def test_extract_events_empty():
     assert extract_events([], 0.3, 1.0) == []
+
+
+# --------------------------------------------------------------------------- #
+# persist_goal_boxes
+# --------------------------------------------------------------------------- #
+
+def test_goal_boxes_persist_through_short_dropouts():
+    from dataclasses import replace
+
+    from reelcut.scoring import persist_goal_boxes
+
+    goal = BBox(100, 100, 200, 150)
+    frames = [make_frame(i) for i in range(20)]        # 4s at 5 fps
+    frames[0] = replace(frames[0], goal_boxes=(goal,))
+    out = persist_goal_boxes(frames, hold_s=2.5)
+    # held for 2.5s (through i=12, t=2.4s), gone at i=13 (t=2.6s)
+    assert out[12].goal_boxes == (goal,)
+    assert out[13].goal_boxes == ()
+
+
+def test_fresh_goal_detection_replaces_held_box():
+    from dataclasses import replace
+
+    from reelcut.scoring import persist_goal_boxes
+
+    old, new = BBox(100, 100, 200, 150), BBox(400, 100, 200, 150)
+    frames = [make_frame(i) for i in range(6)]
+    frames[0] = replace(frames[0], goal_boxes=(old,))
+    frames[3] = replace(frames[3], goal_boxes=(new,))
+    out = persist_goal_boxes(frames, hold_s=2.5)
+    assert out[2].goal_boxes == (old,)
+    assert out[4].goal_boxes == (new,)
+
+
+def test_persist_goal_boxes_no_goals_is_noop():
+    from reelcut.scoring import persist_goal_boxes
+
+    frames = [make_frame(i) for i in range(4)]
+    assert persist_goal_boxes(frames, hold_s=2.5) == frames
+
+
+def test_giant_hallucinated_box_does_not_evict_held_goal():
+    """Review-confirmed failure: crowded goal mouths make the detector emit
+    oversized boxes that score_opportunities discards; such a frame must
+    count as a dropout (inherit the held real goal), not as fresh evidence."""
+    from dataclasses import replace
+
+    from fixtures import H as FRAME_H
+    from reelcut.scoring import persist_goal_boxes
+
+    real = BBox(100, 100, 200, 150)
+    giant = BBox(0, 0, 600, FRAME_H * 0.8)
+    frames = [make_frame(i) for i in range(4)]
+    frames[0] = replace(frames[0], goal_boxes=(real,))
+    frames[2] = replace(frames[2], goal_boxes=(giant,))
+    out = persist_goal_boxes(frames, hold_s=2.5)
+    assert out[2].goal_boxes == (real,)
+    assert out[3].goal_boxes == (real,)

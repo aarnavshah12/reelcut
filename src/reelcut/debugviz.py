@@ -87,23 +87,24 @@ def _tween_identity(ip: IdentityPoint | None, ip_next: IdentityPoint | None, t: 
     return replace(ip, bbox=_lerp_bbox(ip.bbox, ip_next.bbox, t))
 
 
-def _jersey_numbers(frames: list[FrameObservation]) -> dict[int, str]:
-    """track_id -> display label: confirmed numbers plain ("15"), single
-    unconfirmed reads marked provisional ("1?"), conflicts unlabeled."""
-    from .numbers import merge_reads
+def _label_transitions(
+    frames: list[FrameObservation],
+) -> list[tuple[int, int, str]]:
+    """Flattened, frame-ordered (frame_index, track_id, label) label changes.
 
-    seen: dict[int, list[str]] = {}
-    for fo in frames:
-        for read in fo.ocr:
-            digits = "".join(c for c in read.text if c.isdigit())
-            if digits:
-                seen.setdefault(read.track_id, []).append(digits)
-    out: dict[int, str] = {}
-    for tid, reads in seen.items():
-        value, ok = merge_reads(reads)
-        if value is not None:
-            out[tid] = value if ok else value + "?"
-    return out
+    Labels come from numbers.number_timeline — the last number read off each
+    jersey, carried while unreadable — so every player wears one uniform kind
+    of label the moment their number has been seen once."""
+    from .numbers import number_timeline
+
+    timeline = number_timeline(frames)
+    flat = [
+        (fi, tid, label)
+        for tid, transitions in timeline.items()
+        for fi, label in transitions
+    ]
+    flat.sort()
+    return flat
 
 
 def _draw_players(
@@ -176,12 +177,12 @@ def render_debug_video(
     identity: list[IdentityPoint],
     scores: list[ScorePoint] | None,
     cfg: ReelcutConfig,
-    numbers: dict[int, str] | None = None,
 ) -> None:
     """Sequentially decode EVERY source frame, drawing the most recent sampled
     observation on each (hold-last), so the output plays at the source frame
-    rate with annotations updating at the sampling rate. Players with a
-    cleanly-read jersey number are labeled "#<number>"; others show their
+    rate with annotations updating at the sampling rate. Players are labeled
+    "#<last number read off their jersey>" (carried while unreadable, updated
+    live as reads arrive); only never-read tracks fall back to their gray
     track id. Missing scores (None) -> identity info only."""
     if not frames:
         return
@@ -201,8 +202,9 @@ def render_debug_video(
         raise ValueError(f"cannot open debug video writer: {out_path}")
 
     have_scores = scores is not None
-    if numbers is None:
-        numbers = _jersey_numbers(frames)
+    transitions = _label_transitions(frames)
+    numbers: dict[int, str] = {}   # live per-track labels, updated as we pass reads
+    ti = 0
     id_by_ts = {_ts_key(p.timestamp_s): p for p in identity}
     score_by_ts = {_ts_key(p.timestamp_s): p for p in (scores or [])}
 
@@ -217,6 +219,9 @@ def render_debug_video(
                 img = cv2.resize(img, (w, h))
             while fi + 1 < len(frames) and frames[fi + 1].frame_index <= src_idx:
                 fi += 1
+            while ti < len(transitions) and transitions[ti][0] <= src_idx:
+                numbers[transitions[ti][1]] = transitions[ti][2]
+                ti += 1
             fo = frames[fi]
             if fo.frame_index <= src_idx:   # first sample may start later
                 nxt = frames[fi + 1] if fi + 1 < len(frames) else None

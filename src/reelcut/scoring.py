@@ -142,6 +142,38 @@ def interpolate_ball(
     return out
 
 
+def persist_goal_boxes(
+    frames: list[FrameObservation], hold_s: float
+) -> list[FrameObservation]:
+    """Carry goal boxes across short detection dropouts.
+
+    Goals are static scene objects, but detection flickers exactly when it
+    matters — players crowding the goal mouth occlude the frame (measured: the
+    CSKA goal at ~t=42 happened entirely inside a dropout that started at
+    t=41). A frame with no goal boxes inherits the last detected set for up to
+    ``hold_s`` seconds; a fresh SANE detection replaces the held set. Sanity
+    matches score_opportunities' hallucination filter (h <= half the frame):
+    crowded goal mouths make the detector emit giant boxes, and a giant box
+    that scoring will discard anyway must not evict the held real goal in
+    exactly the moment the hold exists for. Held boxes go stale under fast
+    pans, which is why the hold is short. Returns a new list; input
+    unmodified.
+    """
+    out: list[FrameObservation] = []
+    held: tuple[BBox, ...] = ()
+    held_t = -1e9
+    for f in frames:
+        sane = tuple(g for g in f.goal_boxes if g.h <= 0.5 * f.frame_h)
+        if sane:
+            held, held_t = sane, f.timestamp_s
+            out.append(f)
+        elif held and f.timestamp_s - held_t <= hold_s:
+            out.append(replace(f, goal_boxes=held))
+        else:
+            out.append(f)
+    return out
+
+
 def score_timeline(
     identity: list[IdentityPoint],
     frames: list[FrameObservation],

@@ -199,14 +199,20 @@ def label_tracklets(
 
     Rules (applied in order, first hit wins for hard labels):
       * seed tracklet -> TARGET, confidence 1.0, evidence {"seed": 1}.
-      * >= cfg.ocr_neg_votes confident reads of a DIFFERENT number
-        -> NOT_TARGET (evidence "ocr_neg").
+      * >= cfg.ocr_neg_votes confident reads of a DIFFERENT number, dominating
+        matching reads 5:1 -> NOT_TARGET (evidence "ocr_neg").
       * referee class -> NOT_TARGET.
       * mean torso-hist distance to team reference > cfg.color_veto_dist
         -> NOT_TARGET (evidence "color").
-      * >= cfg.ocr_pos_votes confident reads of the matching number
-        -> TARGET, confidence ~0.9 (evidence "ocr_pos").
+      * >= cfg.ocr_pos_votes confident reads of the matching number,
+        dominating different-number reads 5:1 -> TARGET, confidence ~0.9
+        (evidence "ocr_pos").
       * else UNKNOWN with a soft prior in evidence for the chaining step.
+
+    Vote counts are DOMINANCE ratios, not absolutes: always-on continuous
+    reading yields hundreds of reads per long track, so "2 stray misreads"
+    must not outvote 300 correct ones (measured ~1% confident-misread rate
+    would otherwise flip every long target track NOT_TARGET).
     """
     seed_id = find_seed_tracklet(tracklets, spec, frames)
     reference = team_color_reference(spec.team_color)
@@ -222,9 +228,11 @@ def label_tracklets(
                 continue
             if digits == jersey:
                 pos += 1
-            elif digits in jersey:
-                pass  # partial read ("1" or "6" off a 16 shirt): neutral,
-                      # an occluded digit is not evidence of a different kid
+            elif digits in jersey or jersey in digits:
+                pass  # substring either way is neutral: "1" off a 16 shirt is
+                      # an occluded digit, and "71" containing the 7 is usually
+                      # a neighbor's digit fused onto the right number — neither
+                      # is evidence of a different kid
             else:
                 neg += 1
         color_dist = _mean_color_distance(tracklet, reference)
@@ -233,7 +241,7 @@ def label_tracklets(
             labeled = LabeledTracklet(
                 tracklet, IdentityLabel.TARGET, 1.0, {"seed": 1.0}
             )
-        elif neg >= cfg.ocr_neg_votes:
+        elif neg >= cfg.ocr_neg_votes and neg >= 5 * pos:
             labeled = LabeledTracklet(
                 tracklet, IdentityLabel.NOT_TARGET, 0.0, {"ocr_neg": float(neg)}
             )
@@ -243,11 +251,11 @@ def label_tracklets(
             labeled = LabeledTracklet(
                 tracklet, IdentityLabel.NOT_TARGET, 0.0, {"color": color_dist}
             )
-        elif pos >= cfg.ocr_pos_votes and neg == 0:
-            # neg == 0 guard: a track that ALSO read a different number never
-            # binds on jersey evidence — matters most at ocr_pos_votes == 1
-            # (bind-on-first-sighting), where one misread must not be enough
-            # to claim a track while a conflicting read is present.
+        elif pos >= cfg.ocr_pos_votes and pos >= 5 * neg:
+            # Dominance guard (was neg == 0): a track that reads a different
+            # number nearly as often as the matching one never binds on jersey
+            # evidence, but a rare stray misread among hundreds of correct
+            # always-on reads cannot block (or steal) a bind either.
             labeled = LabeledTracklet(
                 tracklet,
                 IdentityLabel.TARGET,

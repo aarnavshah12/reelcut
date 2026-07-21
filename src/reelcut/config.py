@@ -85,8 +85,9 @@ class ReelcutConfig:
                                         # than this (tiny crops = systematic misreads)
     number_audit_gap_s: float = 4.0     # economy mode: min gap between audit reads
     number_audit_attempts: int = 3      # economy mode: max big-crop audit reads
-    number_continuous: bool = True      # keep reading at cadence forever; the
-                                        # label is the live weighted consensus
+    number_continuous: bool = True      # always-on: read every player at every
+                                        # sampled frame; display carries the
+                                        # last-read number per track
                                         # (False = old stop-at-lock economy mode)
     ocr_neg_votes: int = 2              # confident different-number reads to call NOT_TARGET
     color_veto_dist: float = 0.75       # histogram distance beyond which team color vetoes
@@ -99,6 +100,9 @@ class ReelcutConfig:
     # tracking), player-agnostic goal-mouth action still makes the reel.
     fallback_enabled: bool = True
     fallback_weight: float = 0.85       # opportunity score vs target involvement
+    goal_box_hold_s: float = 2.5        # carry goal boxes across detection
+                                        # dropouts (players occlude the goal
+                                        # exactly when shots happen)
 
     # involvement
     smooth_window_s: float = 2.0

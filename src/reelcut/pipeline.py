@@ -221,6 +221,7 @@ def run_pipeline(
     # ------------------------------------------------------------------ #
     if not cache.has(3, "scores"):
         interp_frames = scoring.interpolate_ball(frames, cfg.ball_gap_interp_max_s)
+        interp_frames = scoring.persist_goal_boxes(interp_frames, cfg.goal_box_hold_s)
         raw = scoring.score_timeline(identity, interp_frames, cfg)
         if cfg.fallback_enabled:
             opportunities = scoring.score_opportunities(interp_frames, cfg)
@@ -236,14 +237,24 @@ def run_pipeline(
         events = scoring.extract_events(scores, threshold, cfg.event_min_s)
         if threshold > cfg.event_threshold:
             # A high-action goal-mouth moment never loses to the reel budget:
-            # re-extract at the base threshold and keep the goal_mouth events
-            # the raised bar dropped — but only ones with real action, so
-            # static goal-mouth loitering cannot ride this exemption.
+            # re-extract at the base threshold and keep events the raised bar
+            # dropped IF the RAW score inside them spikes at the goal mouth.
+            # A shot is a transient — the 2s smoothing that stabilizes event
+            # boundaries also dilutes exactly this peak, so the smoothed
+            # series must not be the judge of it. Action gating in
+            # score_opportunities keeps static loitering out of this lane.
+            def has_goal_transient(e: InvolvementEvent) -> bool:
+                return any(
+                    p.score >= 0.6 and "goal_mouth" in p.tags
+                    and e.start_s <= p.timestamp_s <= e.end_s
+                    for p in raw
+                )
+
             goal_events = [
                 e for e in scoring.extract_events(
                     scores, cfg.event_threshold, cfg.event_min_s
                 )
-                if "goal_mouth" in e.tags and e.peak_score >= 0.6
+                if has_goal_transient(e)
             ]
             seen = {(e.start_s, e.end_s) for e in events}
             events = sorted(
@@ -316,7 +327,6 @@ def run_pipeline(
 
             debugviz.render_debug_video(
                 video, paths.debug_mp4, frames, identity, scores, cfg,
-                numbers=number_map or None,
             )
         else:
             print(

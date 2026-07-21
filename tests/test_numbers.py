@@ -162,3 +162,137 @@ def test_continuous_mode_outvotes_early_misread(tiny_video):
 
 def test_continuous_mode_is_default():
     assert ReelcutConfig().number_continuous is True
+
+
+def test_continuous_mode_reads_every_sampled_frame(tiny_video):
+    """User design: the number model is ALWAYS on — one attempt per player
+    per sampled frame, no cadence gate."""
+    reader = CountingReader([("7", 0.9)])
+    frames = track_frames(n=10)
+    bind_numbers(frames, tiny_video, CONT, reader)
+    assert reader.calls == 10
+
+
+def test_concatenation_never_hijacks_majority():
+    """The measured '#71 on the 7 kid' bug: one fused read must not out-rank
+    a track full of clean reads of the real number."""
+    from reelcut.numbers import merge_reads
+
+    value, ok = merge_reads(["7", "7", "7", "71"])
+    assert (value, ok) == ("7", True)
+
+
+def test_assemble_number_keeps_leading_zero_jerseys():
+    from reelcut.numbers import assemble_number
+
+    # TargetSpec documents jerseys like "07" — leading zeros are legitimate
+    digits = [(70, 12, "0", 0.9), (84, 12, "7", 0.85)]
+    assert assemble_number(digits, crop_width=160) == ("07", 0.85)
+
+
+def _read(tid, text, conf=0.9):
+    return OcrRead(track_id=tid, text=text, confidence=conf)
+
+
+def test_timeline_first_read_labels_immediately_and_carries():
+    from reelcut.numbers import number_timeline
+
+    frames = [
+        make_frame(0, [player(5, 60, 60)], ocr=[_read(5, "7")]),
+        make_frame(1, [player(5, 60, 60)]),               # unreadable: carries
+        make_frame(2, [player(5, 60, 60)]),
+    ]
+    assert number_timeline(frames) == {5: [(0, "7")]}
+
+
+def test_timeline_one_glitch_read_never_flips():
+    from reelcut.numbers import number_timeline
+
+    frames = [
+        make_frame(0, [player(5, 60, 60)], ocr=[_read(5, "7")]),
+        make_frame(1, [player(5, 60, 60)], ocr=[_read(5, "13")]),   # glitch
+        make_frame(2, [player(5, 60, 60)], ocr=[_read(5, "7")]),
+    ]
+    assert number_timeline(frames) == {5: [(0, "7")]}
+
+
+def test_timeline_two_agreeing_reads_switch_the_label():
+    """Visible-again semantics (and stolen-track recovery): a genuinely new
+    number takes over after two consecutive agreeing reads."""
+    from reelcut.numbers import number_timeline
+
+    frames = [
+        make_frame(0, [player(5, 60, 60)], ocr=[_read(5, "7")]),
+        make_frame(1, [player(5, 60, 60)], ocr=[_read(5, "13")]),
+        make_frame(2, [player(5, 60, 60)], ocr=[_read(5, "13")]),
+    ]
+    assert number_timeline(frames) == {5: [(0, "7"), (12, "13")]}
+
+
+def test_timeline_partial_read_confirms_instead_of_flipping():
+    from reelcut.numbers import number_timeline
+
+    frames = [
+        make_frame(0, [player(5, 60, 60)], ocr=[_read(5, "16")]),
+        make_frame(1, [player(5, 60, 60)], ocr=[_read(5, "1")]),    # half-hidden 16
+        make_frame(2, [player(5, 60, 60)], ocr=[_read(5, "6")]),    # other half
+    ]
+    assert number_timeline(frames) == {5: [(0, "16")]}
+
+
+def test_timeline_superstring_upgrade_needs_two_reads():
+    from reelcut.numbers import number_timeline
+
+    frames = [
+        make_frame(0, [player(5, 60, 60)], ocr=[_read(5, "1")]),
+        make_frame(1, [player(5, 60, 60)], ocr=[_read(5, "16")]),
+        make_frame(2, [player(5, 60, 60)], ocr=[_read(5, "16")]),
+    ]
+    assert number_timeline(frames) == {5: [(0, "1"), (12, "16")]}
+
+
+def test_timeline_fusion_burst_is_outvoted_by_surrounding_clean_reads():
+    """Review-confirmed failure: consecutive fused '71' reads (two kids
+    adjacent for several frames) must not capture the label of a track full
+    of clean '7's — the window vote keeps '7' in charge."""
+    from reelcut.numbers import number_timeline
+
+    reads = ["7"] * 5 + ["71", "71"] + ["7"] * 3
+    frames = [
+        make_frame(i, [player(5, 60, 60)], ocr=[_read(5, r)])
+        for i, r in enumerate(reads)
+    ]
+    assert number_timeline(frames) == {5: [(0, "7")]}
+
+
+def test_timeline_recovers_when_fusion_lands_first():
+    """No absorbing state: even a track whose FIRST read was a fusion ('71')
+    flips to the true number once clean reads outnumber it."""
+    from reelcut.numbers import number_timeline
+
+    frames = [
+        make_frame(0, [player(5, 60, 60)], ocr=[_read(5, "71")]),
+        make_frame(1, [player(5, 60, 60)], ocr=[_read(5, "7")]),
+        make_frame(2, [player(5, 60, 60)], ocr=[_read(5, "7")]),
+    ]
+    assert number_timeline(frames) == {5: [(0, "71"), (12, "7")]}
+
+
+def test_timeline_old_reads_age_out_of_the_window():
+    """Stolen-track recovery: after the tracker hands the box to a different
+    kid, the old kid's reads expire from the window and the new number takes
+    over without needing to outnumber the whole history."""
+    from reelcut.numbers import number_timeline
+
+    reads = ["7"] * 20 + ["13"] * 10
+    frames = [
+        make_frame(i, [player(5, 60, 60)], ocr=[_read(5, r)])
+        for i, r in enumerate(reads)
+    ]
+    # The 3s window holds ~15 reads at this 5 fps grid: the "7"s age out as
+    # "13"s accumulate, so the flip happens mid-window (~9 reads in), not
+    # after the full 20-read history is outnumbered.
+    transitions = number_timeline(frames)[5]
+    assert transitions[0] == (0, "7")
+    assert transitions[-1][1] == "13"
+    assert transitions[-1][0] <= 28 * 6     # flipped before the "13"s ran out
