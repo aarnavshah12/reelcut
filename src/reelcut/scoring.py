@@ -362,28 +362,37 @@ def score_opportunities(
             if best is None or d < best[0]:
                 best = (d, gh)
         d, gh = best
-        in_goal = any(
+        # 2D containment means "ball at the goal mouth" — a flat goal bbox
+        # covers the grass in front of the net, so this is a strong signal,
+        # NOT proof of a goal.
+        at_mouth = any(
             g.x <= bx <= g.x2 and g.y <= by <= g.y2 for g in goal_boxes
         )
-        if d <= sport.goal_chance_dist:
-            score = 1.0
+        if at_mouth:
+            base = 0.85
+        elif d <= sport.goal_chance_dist:
+            base = 0.55
         elif d >= sport.goal_chance_far_dist:
-            score = 0.0
+            base = 0.0
         else:
             span = sport.goal_chance_far_dist - sport.goal_chance_dist
-            score = 1.0 - (d - sport.goal_chance_dist) / span
-        if in_goal:
-            score = 1.0
-        if score <= 0.0:
+            base = 0.55 * (1.0 - (d - sport.goal_chance_dist) / span)
+        if base <= 0.0:
             points.append(ScorePoint(frame_ts[i], 0.0, ()))
             continue
+        # Action gate: a static ball parked near the net is not a highlight;
+        # shots and attacks arrive at speed. Measured fix for reels padding
+        # themselves with goal-mouth loitering.
         speed = speeds[i]
-        if speed is not None and speed / gh > sport.goal_chance_speed:
-            score = min(1.0, score + 0.3)
+        activity = (
+            0.0 if speed is None
+            else min(1.0, (speed / gh) / sport.goal_chance_speed)
+        )
+        score = base * (0.4 + 0.6 * activity)
         # interpolated/low-confidence balls count for less
         conf = ball.confidence if not ball.interpolated else ball.confidence * 0.7
         score *= max(0.3, min(1.0, conf + 0.4))
-        tags = ("ball_in_goal", "goal_chance") if in_goal else ("goal_chance",)
+        tags = ("goal_chance", "goal_mouth") if at_mouth else ("goal_chance",)
         points.append(ScorePoint(frame_ts[i], min(1.0, score), tags))
     return points
 

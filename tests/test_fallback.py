@@ -23,11 +23,18 @@ def frames_with_goal(ball_positions):
     return out
 
 
-def test_ball_at_goal_scores_high_with_tag():
+def test_static_ball_near_goal_is_tagged_but_action_gated():
     frames = frames_with_goal([(GOAL.x2 + 10, GOAL.cy)] * 10)
     pts = score_opportunities(frames, CFG)
-    assert all(p.score > 0.6 for p in pts)
     assert all("goal_chance" in p.tags for p in pts)
+    assert all(p.score < 0.45 for p in pts)   # parked ball can't reel alone
+
+
+def test_moving_ball_near_goal_scores_high():
+    xs = [(GOAL.x2 + 300 - 60 * i, GOAL.cy) for i in range(6)]  # attacking run
+    frames = frames_with_goal(xs)
+    pts = score_opportunities(frames, CFG)
+    assert any(p.score > 0.5 and "goal_chance" in p.tags for p in pts[1:])
 
 
 def test_ball_midfield_scores_zero():

@@ -55,15 +55,27 @@ def test_giant_goal_boxes_are_ignored():
     assert pts[0].score == 0.0 and pts[0].tags == ()
 
 
-def test_ball_inside_goal_gets_tagged():
+def _goal_frame(i, ball_x, goal=BBox(60, 260, 90, 100), conf=0.8):
+    ball = BallObs(bbox=BBox(ball_x - 7, 300, 14, 14), confidence=conf)
+    frame = make_frame(i, [], ball)
+    return type(frame)(**{**{f: getattr(frame, f) for f in frame.__dataclass_fields__},
+                          "goal_boxes": (goal,)})
+
+
+def test_static_goal_mouth_loitering_scores_low():
     from reelcut.scoring import score_opportunities
-    goal = BBox(60, 260, 90, 100)
-    ball = BallObs(bbox=BBox(95, 300, 14, 14), confidence=0.8)  # center inside goal
-    frame = make_frame(0, [], ball)
-    frame = type(frame)(**{**{f: getattr(frame, f) for f in frame.__dataclass_fields__},
-                           "goal_boxes": (goal,)})
-    pts = score_opportunities([frame], CFG)
-    assert "ball_in_goal" in pts[0].tags and pts[0].score > 0.9
+    frames = [_goal_frame(i, 100) for i in range(5)]   # parked in the goal box
+    pts = score_opportunities(frames, CFG)
+    assert all("goal_mouth" in p.tags for p in pts)
+    assert max(p.score for p in pts) < 0.45             # cannot make a reel alone
+
+
+def test_fast_ball_into_goal_mouth_scores_high():
+    from reelcut.scoring import score_opportunities
+    # ball flies 300px between samples (0.2s) into the goal box
+    frames = [_goal_frame(0, 400), _goal_frame(1, 100)]
+    pts = score_opportunities(frames, CFG)
+    assert "goal_mouth" in pts[1].tags and pts[1].score > 0.6
 
 
 def test_reasonable_goal_boxes_still_score():
@@ -73,4 +85,5 @@ def test_reasonable_goal_boxes_still_score():
     frame = type(frame)(**{**{f: getattr(frame, f) for f in frame.__dataclass_fields__},
                            "goal_boxes": (goal,)})
     pts = score_opportunities([frame], CFG)
-    assert pts[0].score > 0.5 and "goal_chance" in pts[0].tags
+    # static single frame: base signal present but action-gated low
+    assert 0.1 < pts[0].score < 0.45 and "goal_chance" in pts[0].tags

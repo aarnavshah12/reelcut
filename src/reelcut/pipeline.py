@@ -228,14 +228,15 @@ def run_pipeline(
                   f"{cfg.event_threshold:.2f} -> {threshold:.2f}")
         events = scoring.extract_events(scores, threshold, cfg.event_min_s)
         if threshold > cfg.event_threshold:
-            # A registered goal never loses to the reel budget: re-extract at
-            # the base threshold and keep any ball_in_goal events the raised
-            # bar dropped (plan_clips merges overlaps downstream).
+            # A high-action goal-mouth moment never loses to the reel budget:
+            # re-extract at the base threshold and keep the goal_mouth events
+            # the raised bar dropped — but only ones with real action, so
+            # static goal-mouth loitering cannot ride this exemption.
             goal_events = [
                 e for e in scoring.extract_events(
                     scores, cfg.event_threshold, cfg.event_min_s
                 )
-                if "ball_in_goal" in e.tags
+                if "goal_mouth" in e.tags and e.peak_score >= 0.6
             ]
             seen = {(e.start_s, e.end_s) for e in events}
             events = sorted(
