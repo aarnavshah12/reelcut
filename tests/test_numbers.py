@@ -13,7 +13,8 @@ from reelcut.types import OcrRead
 
 from fixtures import make_frame, player
 
-CFG = ReelcutConfig()
+CFG = ReelcutConfig(number_continuous=False)   # economy-mode behavior tests
+CONT = ReelcutConfig()                          # continuous is the default
 
 
 @pytest.fixture(scope="module")
@@ -147,3 +148,17 @@ def test_audit_overturns_wrong_lock(tiny_video):
     enriched, bound = bind_numbers(small + big, tiny_video, CFG, reader)
     assert bound.get(5) == "7"
     assert reader.calls >= 3            # audits actually ran
+
+
+def test_continuous_mode_outvotes_early_misread(tiny_video):
+    """User design: keep reading; wrong early reads get outvoted by the
+    ongoing consensus once the number is genuinely visible."""
+    reader = CountingReader([("11", 0.8), ("11", 0.8)] + [("7", 0.9)] * 20)
+    frames = [make_frame(i, [player(5, 60, 60, h=100)]) for i in range(60)]
+    enriched, bound = bind_numbers(frames, tiny_video, CONT, reader)
+    assert bound.get(5) == "7"
+    assert reader.calls > 4              # kept reading past any would-be lock
+
+
+def test_continuous_mode_is_default():
+    assert ReelcutConfig().number_continuous is True

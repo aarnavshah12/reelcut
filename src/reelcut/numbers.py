@@ -174,7 +174,12 @@ def bind_numbers(
     plan: dict[int, list] = defaultdict(list)
     scheduled: dict[int, int] = {}
     last_planned_ts: dict[int, float] = {}
-    budget = cfg.number_max_attempts + cfg.number_audit_attempts
+    # continuous mode: read at cadence for the track's whole life (the vote
+    # converges as evidence accumulates); economy mode: bounded attempts.
+    budget = (
+        10**9 if cfg.number_continuous
+        else cfg.number_max_attempts + cfg.number_audit_attempts
+    )
     for f in frames:
         for p in f.players:
             tid = p.track_id
@@ -204,10 +209,10 @@ def bind_numbers(
                 if src_idx == pending[pi]:
                     fh, fw = img.shape[:2]
                     for tid, bbox, ts in plan[src_idx]:
-                        # confirmed tracks read again ONLY as sparse audits at
-                        # high-quality moments — a clear look can overturn a
-                        # lock formed from squints; squints cannot.
-                        if is_confirmed(tid):
+                        # economy mode: confirmed tracks read again ONLY as
+                        # sparse big-crop audits. Continuous mode: no lock —
+                        # every scheduled read feeds the consensus.
+                        if not cfg.number_continuous and is_confirmed(tid):
                             if (
                                 bbox.h < big_h
                                 or audits_used.get(tid, 0) >= cfg.number_audit_attempts
