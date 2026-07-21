@@ -201,7 +201,8 @@ def start_job(
         _jobs[job.id] = job
     job.out_dir = JOBS_DIR / job.id
     cmd = [
-        sys.executable, "-m", "reelcut",
+        sys.executable, "-u", "-m", "reelcut",   # -u: unbuffered, so stage
+                                                 # lines stream to the UI live
         "--video", str(video),
         "--jersey", jersey,
         "--team-color", team_color,
