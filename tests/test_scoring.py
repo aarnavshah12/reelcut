@@ -236,33 +236,40 @@ def test_giant_hallucinated_box_does_not_evict_held_goal():
 
 
 # --------------------------------------------------------------------------- #
-# goal_only_events
+# goal_transient_events
 # --------------------------------------------------------------------------- #
 
-def test_goal_only_events_trims_and_drops():
-    from reelcut.scoring import goal_only_events
-    from reelcut.types import InvolvementEvent
+def test_goal_transients_cluster_into_events():
+    from reelcut.scoring import goal_transient_events
 
     raw = [
         ScorePoint(12.0, 0.70, ("goal_chance", "goal_mouth")),
         ScorePoint(13.0, 0.65, ("goal_chance", "goal_mouth")),
+        ScorePoint(15.5, 0.80, ("goal_mouth",)),       # ball fetched from net
         ScorePoint(26.0, 0.70, ("near_ball",)),        # fast but not at a goal
         ScorePoint(2.0, 0.40, ("goal_mouth",)),        # at the goal but slow
+        ScorePoint(40.0, 0.75, ("goal_mouth",)),       # second goal
     ]
-    with_goal = InvolvementEvent(0.0, 20.0, 0.9, 0.5, ("goal_chance",))
-    without = InvolvementEvent(25.0, 30.0, 0.5, 0.4, ("near_ball",))
-    out = goal_only_events([with_goal, without], raw,
-                           lead_s=5.0, tail_s=3.0, min_peak=0.6)
+    out = goal_transient_events(raw, lead_s=5.0, tail_s=3.0, min_peak=0.6)
+    assert len(out) == 2
+    assert (out[0].start_s, out[0].end_s) == (7.0, 18.5)   # 12-5 .. 15.5+3
+    assert out[0].peak_score == 0.80
+    assert (out[1].start_s, out[1].end_s) == (35.0, 43.0)
+
+
+def test_goal_transients_independent_of_smoothing():
+    """A lone 1-sample spike is still a goal event — no smoothed-timeline
+    event needs to exist around it (the failure that lost the t=42 goal)."""
+    from reelcut.scoring import goal_transient_events
+
+    raw = [ScorePoint(42.0, 0.85, ("goal_mouth", "goal_chance"))]
+    out = goal_transient_events(raw, lead_s=5.0, tail_s=3.0, min_peak=0.6)
     assert len(out) == 1
-    assert out[0].start_s == 7.0            # 12 - 5 lead
-    assert out[0].end_s == 16.0             # 13 + 3 tail
+    assert (out[0].start_s, out[0].end_s) == (37.0, 45.0)
 
 
-def test_goal_only_events_never_grows_the_event():
-    from reelcut.scoring import goal_only_events
-    from reelcut.types import InvolvementEvent
+def test_goal_transients_none_without_goal_mouth():
+    from reelcut.scoring import goal_transient_events
 
-    raw = [ScorePoint(10.0, 0.9, ("goal_mouth",))]
-    tight = InvolvementEvent(9.0, 11.0, 0.9, 0.9, ("goal_mouth",))
-    out = goal_only_events([tight], raw, lead_s=5.0, tail_s=3.0, min_peak=0.6)
-    assert out[0].start_s == 9.0 and out[0].end_s == 11.0
+    raw = [ScorePoint(10.0, 0.9, ("near_ball",))]
+    assert goal_transient_events(raw, 5.0, 3.0, 0.6) == []

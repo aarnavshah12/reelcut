@@ -482,7 +482,7 @@ def test_dedupe_player_boxes_drops_overlapping_duplicate():
     dup = player(2, 102, 101, h=100)            # same kid, second track
     far = player(3, 500, 100, h=100)
     f = make_frame(0, [a, dup, far])
-    out = dedupe_player_boxes([f], iou=0.65)
+    out = dedupe_player_boxes([f], overlap=0.65)
     ids = [p.track_id for p in out[0].players]
     assert ids == [1, 3]                        # higher-confidence kept, order stable
 
@@ -492,5 +492,5 @@ def test_dedupe_player_boxes_keeps_separated_players():
     from reelcut.stitching import dedupe_player_boxes
 
     f = make_frame(0, [player(1, 100, 100), player(2, 300, 100)])
-    out = dedupe_player_boxes([f], iou=0.65)
+    out = dedupe_player_boxes([f], overlap=0.65)
     assert len(out[0].players) == 2

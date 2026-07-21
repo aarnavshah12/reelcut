@@ -303,27 +303,21 @@ def run_pipeline(
                 key=lambda e: e.start_s,
             )
         if cfg.goal_only_reel:
-            goal_evts = scoring.goal_only_events(
-                events, raw, cfg.goal_event_lead_s, cfg.goal_event_tail_s,
+            goal_evts = scoring.goal_transient_events(
+                raw, cfg.goal_event_lead_s, cfg.goal_event_tail_s,
                 cfg.goal_transient_score,
             )
             if goal_evts:
+                n_found = len(goal_evts)
                 if cfg.max_goal_clips > 0 and len(goal_evts) > cfg.max_goal_clips:
-                    def transient_peak(e: InvolvementEvent) -> float:
-                        return max(
-                            (p.score for p in raw
-                             if "goal_mouth" in p.tags
-                             and e.start_s <= p.timestamp_s <= e.end_s),
-                            default=0.0,
-                        )
                     goal_evts = sorted(
-                        sorted(goal_evts, key=transient_peak, reverse=True)
-                        [: cfg.max_goal_clips],
+                        sorted(goal_evts, key=lambda e: e.peak_score,
+                               reverse=True)[: cfg.max_goal_clips],
                         key=lambda e: e.start_s,
                     )
                 _health(3, "goals",
-                        f"goal-only reel: {len(goal_evts)} goal events kept "
-                        f"of {len(events)} candidates")
+                        f"goal-only reel: {len(goal_evts)} of {n_found} "
+                        f"goal moments kept (from raw transients)")
                 events = goal_evts
             else:
                 # no goals in this footage: an empty reel helps nobody, so

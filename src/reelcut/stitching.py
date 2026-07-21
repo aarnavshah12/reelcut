@@ -41,17 +41,25 @@ _MIN_JUNCTION_GAP_S = 0.25    # floor on the gap used to scale distance/speed
 
 
 def dedupe_player_boxes(
-    frames: list[FrameObservation], iou: float
+    frames: list[FrameObservation], overlap: float
 ) -> list[FrameObservation]:
-    """Per frame, drop the lower-confidence of two player boxes overlapping
-    by more than ``iou``.
+    """Per frame, drop the lower-confidence of two player boxes whose
+    CONTAINMENT (intersection over the smaller box's area) exceeds
+    ``overlap``.
 
-    Pile-ups make the detector/tracker put two near-identical boxes on one
-    kid (measured: a '#8' and a '#2' box on the same player); every
-    downstream consumer — number reads, identity votes, rendering — is
-    better off seeing one player once. Returns a new list; input unmodified.
+    Pile-ups make the detector/tracker put two boxes on one kid — often a
+    small partial box nested inside the full one (measured: a '#8' and a
+    '#2' box on the same player). Containment catches nesting that plain
+    IoU misses when the box sizes differ. Returns a new list; input
+    unmodified.
     """
     from dataclasses import replace as _replace
+
+    def containment(a, b) -> float:
+        ix = max(0.0, min(a.x2, b.x2) - max(a.x, b.x))
+        iy = max(0.0, min(a.y2, b.y2) - max(a.y, b.y))
+        smaller = min(a.area, b.area)
+        return (ix * iy) / smaller if smaller > 0 else 0.0
 
     out: list[FrameObservation] = []
     for f in frames:
@@ -60,7 +68,7 @@ def dedupe_player_boxes(
             continue
         keep = []
         for p in sorted(f.players, key=lambda p: -p.confidence):
-            if all(p.bbox.iou(k.bbox) <= iou for k in keep):
+            if all(containment(p.bbox, k.bbox) <= overlap for k in keep):
                 keep.append(p)
         if len(keep) == len(f.players):
             out.append(f)
