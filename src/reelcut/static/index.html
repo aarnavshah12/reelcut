@@ -175,8 +175,15 @@
   .clipcard video { border-radius: 0; }
   .clipcard .meta { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; }
   .clipcard .meta .t { font-weight: 700; font-size: 13.5px; }
-  .clipcard .meta a { color: var(--violet-hot); font-size: 12.5px; text-decoration: none; margin-left: 10px; }
+  .clipcard .meta a { color: var(--violet-hot); font-size: 14px; text-decoration: none; margin-left: 10px; }
   .clipcard .meta a:hover { color: var(--lime); }
+  .ghostbtn {
+    background: #1a1a26; color: var(--dim); border: 1px solid var(--edge2);
+    border-radius: 999px; padding: 5px 11px; font-size: 11px; font-weight: 700;
+    letter-spacing: .5px; box-shadow: none;
+  }
+  .ghostbtn:hover:not(:disabled) { transform: none; color: var(--text); border-color: var(--violet); box-shadow: none; }
+  .ghostbtn.on { color: var(--lime); border-color: rgba(200,255,61,.5); background: rgba(200,255,61,.08); }
   .fullwrap { padding: 0 30px 30px; }
   details.full summary {
     cursor: pointer; color: var(--dim); font-size: 13.5px; padding: 10px 0 16px;
@@ -261,13 +268,7 @@
       <p class="cap">The reel — every kept goal moment, back to back. Unmute for the crowd. 🔊</p>
     </div>
     <div class="section-label">Goal moments</div>
-    <div class="clipgrid" id="clips"></div>
-    <div class="section-label">Whole game, annotated</div>
-    <div class="fullwrap">
-      <details class="full"><summary>▶ Watch the full annotated game (every player labeled, ball tracked)</summary>
-        <video id="fullvid" controls playsinline preload="none"></video>
-      </details>
-    </div>
+    <div class="clipgrid" id="clips" style="padding-bottom:30px"></div>
   </div>
 
   <div class="footer">built on <b>Roboflow</b> · rf-detr + BoT-SORT + your own trained models</div>
@@ -427,22 +428,34 @@ function reveal(res, lines) {
   $('rJersey').textContent = '#' + ($('jersey').value.trim() || '?');
   $('stats').innerHTML = statChips(lines);
   $('reel').src = res.highlights;
-  $('fullvid').src = res.annotated_full;
   $('clips').innerHTML = '';
-  const annotated = res.clips.filter(u => u.includes('_annotated'));
-  annotated.forEach((u, i) => {
-    const clean = u.replace('_annotated', '');
-    const label = (u.match(/clip\d+_(\d+s-\d+s)/) || [,''])[1].replace('-', ' → ');
+  const cleanClips = res.clips.filter(u => !u.includes('_annotated'));
+  cleanClips.forEach((clean, i) => {
+    const annotated = res.clips.find(
+      u => u.includes('_annotated') && u.replace('_annotated', '') === clean
+    );
+    const label = (clean.match(/clip\d+_(\d+s-\d+s)/) || [,''])[1].replace('-', ' → ');
     const d = document.createElement('div');
     d.className = 'clipcard';
     d.innerHTML = `<span class="goalbadge">⚽ GOAL MOMENT ${i + 1}</span>
-      <video muted playsinline preload="metadata" src="${u}"></video>
+      <video muted playsinline preload="metadata" src="${clean}"></video>
       <div class="meta"><span class="t">${label}</span>
-      <span><a href="${clean}" download>clean ⭳</a><a href="${u}" download>annotated ⭳</a></span></div>`;
+      <span>${annotated ? '<button class="ovl ghostbtn">tracking overlay: OFF</button>' : ''}
+      <a href="${clean}" download>⭳</a></span></div>`;
     const v = d.querySelector('video');
     d.onmouseenter = () => v.play();
     d.onmouseleave = () => { v.pause(); v.currentTime = 0; };
     v.onclick = () => { v.controls = true; v.muted = false; };
+    const btn = d.querySelector('.ovl');
+    if (btn) btn.onclick = () => {
+      const on = v.src.includes('_annotated');
+      const t = v.currentTime;
+      v.src = on ? clean : annotated;
+      v.currentTime = t; v.play();
+      btn.textContent = 'tracking overlay: ' + (on ? 'OFF' : 'ON');
+      btn.classList.toggle('on', !on);
+      d.querySelector('a').href = on ? clean : annotated;
+    };
     $('clips').appendChild(d);
   });
   activate('step5');
