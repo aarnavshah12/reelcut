@@ -362,6 +362,9 @@ def score_opportunities(
             if best is None or d < best[0]:
                 best = (d, gh)
         d, gh = best
+        in_goal = any(
+            g.x <= bx <= g.x2 and g.y <= by <= g.y2 for g in goal_boxes
+        )
         if d <= sport.goal_chance_dist:
             score = 1.0
         elif d >= sport.goal_chance_far_dist:
@@ -369,6 +372,8 @@ def score_opportunities(
         else:
             span = sport.goal_chance_far_dist - sport.goal_chance_dist
             score = 1.0 - (d - sport.goal_chance_dist) / span
+        if in_goal:
+            score = 1.0
         if score <= 0.0:
             points.append(ScorePoint(frame_ts[i], 0.0, ()))
             continue
@@ -378,7 +383,8 @@ def score_opportunities(
         # interpolated/low-confidence balls count for less
         conf = ball.confidence if not ball.interpolated else ball.confidence * 0.7
         score *= max(0.3, min(1.0, conf + 0.4))
-        points.append(ScorePoint(frame_ts[i], min(1.0, score), ("goal_chance",)))
+        tags = ("ball_in_goal", "goal_chance") if in_goal else ("goal_chance",)
+        points.append(ScorePoint(frame_ts[i], min(1.0, score), tags))
     return points
 
 

@@ -55,6 +55,17 @@ def test_giant_goal_boxes_are_ignored():
     assert pts[0].score == 0.0 and pts[0].tags == ()
 
 
+def test_ball_inside_goal_gets_tagged():
+    from reelcut.scoring import score_opportunities
+    goal = BBox(60, 260, 90, 100)
+    ball = BallObs(bbox=BBox(95, 300, 14, 14), confidence=0.8)  # center inside goal
+    frame = make_frame(0, [], ball)
+    frame = type(frame)(**{**{f: getattr(frame, f) for f in frame.__dataclass_fields__},
+                           "goal_boxes": (goal,)})
+    pts = score_opportunities([frame], CFG)
+    assert "ball_in_goal" in pts[0].tags and pts[0].score > 0.9
+
+
 def test_reasonable_goal_boxes_still_score():
     ball = BallObs(bbox=BBox(100, 300, 14, 14), confidence=0.8)
     goal = BBox(60, 260, 90, 100)               # h=100 of 720: fine
