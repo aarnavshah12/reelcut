@@ -30,12 +30,44 @@ Reader = Callable[[np.ndarray], "tuple[str, float] | None"]
 _CROP_MARGIN = 0.10   # widen player boxes slightly so numbers at the edge survive
 
 
+def assemble_number(
+    digits: "list[tuple[float, float, str, float]]", crop_width: float
+) -> tuple[str, float] | None:
+    """(x, width, char, conf) detections -> the crop owner's number.
+
+    Overlapping players put TWO kids' digits in one crop (measured: reads
+    like "108" and "714" from a 10 next to an 8). Cluster digits by x-gap
+    (a gap wider than 1.6x the median digit width separates players), keep
+    the cluster nearest the crop's horizontal center, and reject 3+ digit
+    results as ambiguous — youth numbers are 1-2 digits, and no read beats
+    a wrong bind (the schedule simply tries again later).
+    """
+    if not digits:
+        return None
+    digits = sorted(digits, key=lambda d: d[0])
+    widths = sorted(d[1] for d in digits)
+    w_med = max(widths[len(widths) // 2], 1.0)
+    clusters: list[list[tuple[float, float, str, float]]] = [[digits[0]]]
+    for d in digits[1:]:
+        if d[0] - clusters[-1][-1][0] > 1.6 * w_med:
+            clusters.append([d])
+        else:
+            clusters[-1].append(d)
+    center = crop_width / 2.0
+    best = min(
+        clusters,
+        key=lambda c: abs(sum(d[0] for d in c) / len(c) - center),
+    )
+    if len(best) > 2:
+        return None
+    return "".join(d[2] for d in best), min(d[3] for d in best)
+
+
 def make_digit_reader(
     model_id: str, api_key: str, min_conf: float
 ) -> Reader:
     """Digit-detector-backed reader: detections' classes ARE the characters;
-    left-to-right x-order assembles the number (same idea as the workflow's
-    stitch block). Confidence = weakest digit's confidence."""
+    assemble_number picks the crop owner's digits."""
     from .workflow_client import _prepare_inference_env
 
     _prepare_inference_env()
@@ -48,14 +80,11 @@ def make_digit_reader(
             return None
         r = model.infer(crop, confidence=min_conf)
         preds = r[0].predictions if isinstance(r, list) else r.predictions
-        digits = sorted(
-            ((p.x, str(p.class_name), float(p.confidence)) for p in preds
-             if str(p.class_name).isdigit()),
-            key=lambda t: t[0],
-        )
-        if not digits:
-            return None
-        return "".join(d[1] for d in digits), min(d[2] for d in digits)
+        digits = [
+            (float(p.x), float(p.width), str(p.class_name), float(p.confidence))
+            for p in preds if str(p.class_name).isdigit()
+        ]
+        return assemble_number(digits, float(crop.shape[1]))
 
     return read
 

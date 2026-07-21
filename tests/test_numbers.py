@@ -88,6 +88,25 @@ def test_prebound_tracks_skip_reader(tiny_video):
     assert reader.calls == 0
 
 
+def test_assemble_number_picks_central_cluster():
+    from reelcut.numbers import assemble_number
+    # "10" centered, a neighbor's "8" far right (the measured "108" bug)
+    digits = [(70, 12, "1", 0.9), (84, 12, "0", 0.85), (150, 12, "8", 0.8)]
+    assert assemble_number(digits, crop_width=160) == ("10", 0.85)
+
+
+def test_assemble_number_rejects_ambiguous_triples():
+    from reelcut.numbers import assemble_number
+    digits = [(60, 12, "7", 0.9), (74, 12, "1", 0.9), (88, 12, "4", 0.9)]
+    assert assemble_number(digits, crop_width=160) is None
+
+
+def test_assemble_number_simple_cases():
+    from reelcut.numbers import assemble_number
+    assert assemble_number([(80, 12, "7", 0.8)], 160) == ("7", 0.8)
+    assert assemble_number([], 160) is None
+
+
 def test_missing_video_is_graceful():
     reader = CountingReader([("24", 0.9)])
     frames = track_frames(n=4)
