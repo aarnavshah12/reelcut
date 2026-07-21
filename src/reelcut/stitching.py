@@ -222,6 +222,9 @@ def label_tracklets(
                 continue
             if digits == jersey:
                 pos += 1
+            elif digits in jersey:
+                pass  # partial read ("1" or "6" off a 16 shirt): neutral,
+                      # an occluded digit is not evidence of a different kid
             else:
                 neg += 1
         color_dist = _mean_color_distance(tracklet, reference)

@@ -451,3 +451,14 @@ def test_timeline_drops_target_claims_below_identity_floor() -> None:
     timeline = identity_timeline([weak], [make_frame(0)], CFG)
     assert timeline[0].confidence == 0.0
     assert timeline[0].bbox is None
+
+
+def test_partial_digit_read_is_neutral_not_negative() -> None:
+    """A '1' read off a '16' shirt (occluded digit) must not count against."""
+    frames = frames_from(
+        {i: [player(41, 500, 100)] for i in range(6)},
+        {0: [OcrRead(41, "1", 0.6)], 1: [OcrRead(41, "6", 0.6)],
+         2: [OcrRead(41, "16", 0.6)]},
+    )
+    labeled = label_tracklets(build_tracklets(frames), spec(jersey="16"), frames, CFG)
+    assert labeled[0].label is IdentityLabel.TARGET  # the full read binds
