@@ -83,6 +83,8 @@ class ReelcutConfig:
                                         # steal the violet target box
     number_min_crop_h: int = 60         # skip number attempts on crops shorter
                                         # than this (tiny crops = systematic misreads)
+    number_audit_gap_s: float = 4.0     # confirmed tracks: min gap between audit reads
+    number_audit_attempts: int = 3      # confirmed tracks: max big-crop audit reads
     ocr_neg_votes: int = 2              # confident different-number reads to call NOT_TARGET
     color_veto_dist: float = 0.75       # histogram distance beyond which team color vetoes
     max_plausible_speed: float = 8.0    # player-heights/s; faster linking = implausible

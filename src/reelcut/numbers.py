@@ -89,32 +89,48 @@ def make_digit_reader(
     return read
 
 
-def merge_reads(reads: list[str]) -> tuple[str | None, bool]:
+def merge_reads(
+    reads: "list[str | tuple[str, float]]",
+) -> tuple[str | None, bool]:
     """Reconcile a track's reads -> (value, confirmed).
 
-    Two reads agree when one is a substring of the other (a "1" off a "15"
-    shirt is a partial read of the same number); the agreed value is the
-    longest. Returns (majority value, True) once >= 2 reads agree, a single
-    read as (value, False) — provisional, keep attempting — and (None, False)
-    for unresolved conflicts, because a wrong lock is worse than no label.
+    Reads are (digits, weight) — a bare str means weight 1.0. A read from a
+    big, clear crop carries weight 2.0, so ONE clear look outweighs repeated
+    squints (fixes the "clearly a 7 but it keeps saying 11" failure: the 11
+    came from two low-quality reads; the clear 7 must win).
+
+    Reads agree when one is a substring of the other (partial digit = same
+    number); a group's strength is its summed weight, tie-broken by its best
+    single read's weight. Confirmed = strength >= 2 and strictly leading.
+    A lone weak group is provisional; unresolved conflicts return None,
+    because a wrong lock is worse than no label.
     """
     if not reads:
         return None, False
-    groups: list[list[str]] = []
-    for read in reads:
+    weighted = [(r, 1.0) if isinstance(r, str) else r for r in reads]
+    groups: list[list[tuple[str, float]]] = []
+    for read, w in weighted:
         for g in groups:
-            if all(read in v or v in read for v in g):
-                g.append(read)
+            if all(read in v or v in read for v, _ in g):
+                g.append((read, w))
                 break
         else:
-            groups.append([read])
-    groups.sort(key=len, reverse=True)
+            groups.append([(read, w)])
+
+    def rank(g: list[tuple[str, float]]) -> tuple[float, float]:
+        return (sum(w for _, w in g), max(w for _, w in g))
+
+    groups.sort(key=rank, reverse=True)
     best = groups[0]
-    if len(best) >= 2 and (len(groups) == 1 or len(best) > len(groups[1])):
-        return max(best, key=len), True
+    value = max((v for v, _ in best), key=len)
+    if len(groups) > 1 and rank(best) == rank(groups[1]):
+        return None, False               # dead tie between rivals: no label
+    strength, _ = rank(best)
+    if strength >= 2.0:
+        return value, True               # strong and strictly leading: lock
     if len(groups) == 1 and len(best) == 1:
-        return best[0], False
-    return None, False
+        return value, False              # one weak read: provisional, keep trying
+    return None, False                   # weak leader amid conflict: no label
 
 
 def _existing_reads(frames: list[FrameObservation]) -> dict[int, list[str]]:
@@ -144,32 +160,37 @@ def bind_numbers(
     """
     import cv2
 
-    pools: dict[int, list[str]] = _existing_reads(frames)
-    confirmed: set[int] = {
-        tid for tid, reads in pools.items() if merge_reads(reads)[1]
-    }
+    pools: dict[int, list] = _existing_reads(frames)
+    big_h = 2.0 * cfg.number_min_crop_h    # crops this tall read clearly: weight 2
     min_gap_s = 1.0 / max(cfg.number_attempt_hz, 1e-6)
 
-    # attempt plan: frame_index -> [(track_id, bbox)]
+    def is_confirmed(tid: int) -> bool:
+        return merge_reads(pools.get(tid, []))[1]
+
+    # attempt plan: frame_index -> [(track_id, bbox)]. Unconfirmed tracks get
+    # the normal schedule; CONFIRMED tracks still get sparse audit attempts at
+    # high-quality moments only (big crop), so a clear look can overturn a
+    # lock formed from squints.
     plan: dict[int, list] = defaultdict(list)
-    attempts_left: dict[int, int] = {}
-    last_attempt_ts: dict[int, float] = {}
+    scheduled: dict[int, int] = {}
+    last_planned_ts: dict[int, float] = {}
+    budget = cfg.number_max_attempts + cfg.number_audit_attempts
     for f in frames:
         for p in f.players:
             tid = p.track_id
-            if tid in confirmed:
-                continue
             if p.bbox.h < cfg.number_min_crop_h:
                 continue    # too small to read reliably; wait for a closer view
-            if attempts_left.get(tid, cfg.number_max_attempts) <= 0:
+            if scheduled.get(tid, 0) >= budget:
                 continue
-            if f.timestamp_s - last_attempt_ts.get(tid, -1e9) < min_gap_s:
+            if f.timestamp_s - last_planned_ts.get(tid, -1e9) < min_gap_s:
                 continue
-            last_attempt_ts[tid] = f.timestamp_s
-            attempts_left[tid] = attempts_left.get(tid, cfg.number_max_attempts) - 1
-            plan[f.frame_index].append((tid, p.bbox))
+            scheduled[tid] = scheduled.get(tid, 0) + 1
+            last_planned_ts[tid] = f.timestamp_s
+            plan[f.frame_index].append((tid, p.bbox, f.timestamp_s))
 
     new_reads: dict[int, list[OcrRead]] = defaultdict(list)   # frame_index -> reads
+    audits_used: dict[int, int] = {}
+    last_read_ts: dict[int, float] = {}
     if plan and video.exists():
         cap = cv2.VideoCapture(str(video))
         try:
@@ -182,34 +203,42 @@ def bind_numbers(
                     break
                 if src_idx == pending[pi]:
                     fh, fw = img.shape[:2]
-                    for tid, bbox in plan[src_idx]:
-                        if tid in confirmed:  # confirmed earlier in this pass
-                            continue
+                    for tid, bbox, ts in plan[src_idx]:
+                        # confirmed tracks read again ONLY as sparse audits at
+                        # high-quality moments — a clear look can overturn a
+                        # lock formed from squints; squints cannot.
+                        if is_confirmed(tid):
+                            if (
+                                bbox.h < big_h
+                                or audits_used.get(tid, 0) >= cfg.number_audit_attempts
+                                or ts - last_read_ts.get(tid, -1e9) < cfg.number_audit_gap_s
+                            ):
+                                continue
+                            audits_used[tid] = audits_used.get(tid, 0) + 1
                         mx, my = bbox.w * _CROP_MARGIN, bbox.h * _CROP_MARGIN
                         x0 = max(0, int(bbox.x - mx)); y0 = max(0, int(bbox.y - my))
                         x1 = min(fw, int(bbox.x2 + mx)); y1 = min(fh, int(bbox.y2 + my))
                         if x1 <= x0 or y1 <= y0:
                             continue
                         result = reader(img[y0:y1, x0:x1])
+                        last_read_ts[tid] = ts
                         if result is not None and result[0]:
                             number, conf = result
-                            pools[tid].append(number)
+                            weight = 2.0 if bbox.h >= big_h else 1.0
+                            pools.setdefault(tid, []).append((number, weight))
                             new_reads[src_idx].append(
                                 OcrRead(track_id=tid, text=number, confidence=conf)
                             )
-                            if merge_reads(pools[tid])[1]:
-                                confirmed.add(tid)   # two agreeing reads: lock
                     pi += 1
                 src_idx += 1
         finally:
             cap.release()
 
-    bound = {
-        tid: value
-        for tid, reads in pools.items()
-        for value, _ok in [merge_reads(reads)]
-        if value is not None
-    }
+    bound = {}
+    for tid, reads in pools.items():
+        value, ok = merge_reads(reads)
+        if value is not None:
+            bound[tid] = value if ok else value + "?"
 
     if not new_reads:
         return list(frames), bound

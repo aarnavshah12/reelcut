@@ -176,6 +176,7 @@ def render_debug_video(
     identity: list[IdentityPoint],
     scores: list[ScorePoint] | None,
     cfg: ReelcutConfig,
+    numbers: dict[int, str] | None = None,
 ) -> None:
     """Sequentially decode EVERY source frame, drawing the most recent sampled
     observation on each (hold-last), so the output plays at the source frame
@@ -200,7 +201,8 @@ def render_debug_video(
         raise ValueError(f"cannot open debug video writer: {out_path}")
 
     have_scores = scores is not None
-    numbers = _jersey_numbers(frames)
+    if numbers is None:
+        numbers = _jersey_numbers(frames)
     id_by_ts = {_ts_key(p.timestamp_s): p for p in identity}
     score_by_ts = {_ts_key(p.timestamp_s): p for p in (scores or [])}
 

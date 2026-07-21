@@ -134,6 +134,7 @@ def run_pipeline(
         # Stage 1.5: read-until-bound jersey numbers (skipped for the stub,
         # which synthesizes its own reads, and when no video/model/key exists).
         number_reads: list[tuple[int, object]] = []
+        number_map: dict[int, str] = {}
         if (
             cfg.digit_model_id
             and video.exists()
@@ -147,15 +148,17 @@ def run_pipeline(
                 os.environ["ROBOFLOW_API_KEY"],
                 cfg.digit_min_conf,
             )
-            enriched, bound = numbers.bind_numbers(frames, video, cfg, reader)
+            enriched, number_map = numbers.bind_numbers(frames, video, cfg, reader)
             number_reads = [
                 (f.frame_index, r)
                 for f, orig in zip(enriched, frames)
                 for r in f.ocr[len(orig.ocr):]
             ]
             frames = enriched
+            n_confirmed = sum(1 for v in number_map.values() if not v.endswith("?"))
             _health(2, "numbers",
-                    f"{len(bound)} tracks bound to numbers "
+                    f"{n_confirmed} confirmed + "
+                    f"{len(number_map) - n_confirmed} provisional numbers "
                     f"({len(number_reads)} fresh reads)")
         tracklets = stitching.build_tracklets(frames)
         seed_track = stitching.find_seed_tracklet(tracklets, spec, frames)
@@ -177,12 +180,16 @@ def run_pipeline(
             "labeled": labeled,
             "timeline": identity,
             "number_reads": [[fi, r] for fi, r in number_reads],
+            "numbers_map": number_map,
         })
         cache.save(2, "fingerprint", fingerprint)
     else:
         payload = cache.load(2, "identity")
         labeled = payload["labeled"]
         identity = payload["timeline"]
+        number_map = {
+            int(k): v for k, v in (payload.get("numbers_map") or {}).items()
+        }
         stored_reads = payload.get("number_reads") or []
         if stored_reads:
             by_index: dict[int, list] = {}
@@ -308,7 +315,8 @@ def run_pipeline(
             from . import debugviz  # deferred: pulls in cv2
 
             debugviz.render_debug_video(
-                video, paths.debug_mp4, frames, identity, scores, cfg
+                video, paths.debug_mp4, frames, identity, scores, cfg,
+                numbers=number_map or None,
             )
         else:
             print(

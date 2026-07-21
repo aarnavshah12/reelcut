@@ -21,7 +21,7 @@ def tiny_video(tmp_path_factory):
     """60 source frames of flat color at 30fps, 320x240."""
     path = tmp_path_factory.mktemp("vid") / "v.mp4"
     w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 30, (320, 240))
-    for _ in range(150):
+    for _ in range(450):
         w.write(np.full((240, 320, 3), 90, np.uint8))
     w.release()
     return path
@@ -129,3 +129,21 @@ def test_missing_video_is_graceful():
     enriched, bound = bind_numbers(frames, Path("/nope.mp4"), CFG, reader)
     assert bound == {} and reader.calls == 0
     assert enriched == frames
+
+
+def test_clear_read_outweighs_repeated_squints():
+    from reelcut.numbers import merge_reads
+    # two low-quality reads formed "11"; one high-quality read says "7"
+    value, ok = merge_reads([("1", 1.0), ("11", 1.0), ("7", 2.0)])
+    assert (value, ok) == ("7", True)
+
+
+def test_audit_overturns_wrong_lock(tiny_video):
+    """The '7 clearly visible but it keeps 11' case: small-crop reads lock
+    '11'; later big-crop audits read '7' and overturn."""
+    reader = CountingReader([("11", 0.8), ("11", 0.8), ("7", 0.9), ("7", 0.9)])
+    small = [make_frame(i, [player(5, 60, 60, h=100)]) for i in range(8)]
+    big = [make_frame(30 + i, [player(5, 60, 60, h=150)]) for i in range(40)]
+    enriched, bound = bind_numbers(small + big, tiny_video, CFG, reader)
+    assert bound.get(5) == "7"
+    assert reader.calls >= 3            # audits actually ran
