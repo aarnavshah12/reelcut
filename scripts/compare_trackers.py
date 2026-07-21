@@ -12,7 +12,7 @@ dominates CPU time), then reports ground-truth-free stability proxies:
 
 Usage:
   uv run python scripts/compare_trackers.py [--duration 45] [--fps 5]
-      [--video data/fixtures/game_2min.mp4] [--model my-first-project-gsrpg/18]
+      [--video data/fixtures/game_2min.mp4] [--model ia-foot-8ecu7/1]
 
 Writes output/tracker_comparison.json and prints a table.
 """
