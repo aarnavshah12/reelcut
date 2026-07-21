@@ -135,6 +135,11 @@ class ReelcutConfig:
     goal_event_lead_s: float = 5.0      # buildup kept before the transient
     goal_event_tail_s: float = 3.0      # celebration kept after it
     goal_transient_score: float = 0.6   # raw goal_mouth score that counts
+    max_goal_clips: int = 0             # keep only the N strongest goal events
+                                        # (by peak raw transient); 0 = keep all.
+                                        # Shots and goals are indistinguishable
+                                        # in 2D, so "just the goals" is a dial,
+                                        # not a heuristic.
 
     # involvement
     smooth_window_s: float = 2.0

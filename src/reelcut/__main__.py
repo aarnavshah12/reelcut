@@ -109,6 +109,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sport", default="soccer", metavar="NAME", help="sport preset"
     )
+    parser.add_argument(
+        "--max-goal-clips", type=int, default=None, metavar="N",
+        help="keep only the N strongest goal moments (default: all)",
+    )
     return parser
 
 
@@ -139,6 +143,8 @@ def main(argv: list[str] | None = None) -> int:
         overrides["model_id"] = args.model_id
     if args.api_url is not None:
         overrides["api_url"] = args.api_url
+    if args.max_goal_clips is not None:
+        overrides["max_goal_clips"] = args.max_goal_clips
     if overrides:
         cfg = replace(cfg, **overrides)
     try:

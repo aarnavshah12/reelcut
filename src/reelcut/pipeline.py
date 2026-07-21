@@ -294,6 +294,19 @@ def run_pipeline(
                 cfg.goal_transient_score,
             )
             if goal_evts:
+                if cfg.max_goal_clips > 0 and len(goal_evts) > cfg.max_goal_clips:
+                    def transient_peak(e: InvolvementEvent) -> float:
+                        return max(
+                            (p.score for p in raw
+                             if "goal_mouth" in p.tags
+                             and e.start_s <= p.timestamp_s <= e.end_s),
+                            default=0.0,
+                        )
+                    goal_evts = sorted(
+                        sorted(goal_evts, key=transient_peak, reverse=True)
+                        [: cfg.max_goal_clips],
+                        key=lambda e: e.start_s,
+                    )
                 _health(3, "goals",
                         f"goal-only reel: {len(goal_evts)} goal events kept "
                         f"of {len(events)} candidates")
@@ -360,15 +373,63 @@ def run_pipeline(
         f"{len(clips)} clips, {total_s:.1f}s total ({total_pct:.1f}% of source)",
     )
 
+    def _clip_stem(i: int, c: Clip) -> str:
+        tag = "_".join(c.reasons[:2]) if c.reasons else "clip"
+        return f"clip{i + 1}_{c.start_s:.0f}s-{c.end_s:.0f}s_{tag}"
+
+    def _export_clip_files(source: Path, work_dir: Path, suffix: str) -> None:
+        """Per-clip files with human names in <out>/clips/ (parents never dig
+        in the cache for seg_XXX.mp4 again)."""
+        import shutil
+
+        clips_dir = paths.out_dir / "clips"
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        expected = [work_dir / f"seg_{i:03d}.mp4" for i in range(len(clips))]
+        if not all(p.exists() for p in expected):
+            clipcutter.cut_reel(
+                clips, source,
+                work_dir.with_suffix(".reel.mp4"), work_dir,
+            )
+        for old in clips_dir.glob(f"*{suffix}.mp4"):
+            old.unlink()
+        for i, (c, seg) in enumerate(zip(clips, expected)):
+            if seg.exists():
+                shutil.copy(seg, clips_dir / f"{_clip_stem(i, c)}{suffix}.mp4")
+
+    if video_exists and clips:
+        _export_clip_files(video, cache.dir / "segments", "")
+
     # ------------------------------------------------------------------ #
-    # Optional debug render
+    # Optional debug render + annotated deliverables
     # ------------------------------------------------------------------ #
     if debug_video:
         if video_exists:
+            import subprocess
+
             from . import debugviz  # deferred: pulls in cv2
 
             debugviz.render_debug_video(
                 video, paths.debug_mp4, frames, identity, scores, cfg,
+            )
+            if clips:
+                clipcutter.cut_reel(
+                    clips, paths.debug_mp4,
+                    paths.out_dir / "highlights_annotated.mp4",
+                    cache.dir / "segments_annotated",
+                )
+                _export_clip_files(
+                    paths.debug_mp4, cache.dir / "segments_annotated",
+                    "_annotated",
+                )
+            # browser/share-friendly h264 of the full annotated video (the
+            # raw debug.mp4 is mp4v, which browsers refuse to play)
+            subprocess.run(
+                [ffmpeg.ffmpeg_exe(), "-y", "-loglevel", "error",
+                 "-i", str(paths.debug_mp4),
+                 "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p",
+                 "-movflags", "+faststart",
+                 str(paths.out_dir / "annotated_full.mp4")],
+                check=True,
             )
         else:
             print(
