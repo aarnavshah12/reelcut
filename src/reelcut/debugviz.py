@@ -43,6 +43,50 @@ def _put_text(
     cv2.putText(img, text, org, _FONT, scale, color, thickness, cv2.LINE_AA)
 
 
+def _lerp_bbox(a, b, t: float):
+    from .types import BBox
+
+    return BBox(
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.w + (b.w - a.w) * t,
+        a.h + (b.h - a.h) * t,
+    )
+
+
+def _tween(prev: FrameObservation, nxt: FrameObservation | None, t: float) -> FrameObservation:
+    """Interpolated view between two sampled observations so annotations move
+    at the SOURCE frame rate instead of holding still between samples.
+    Tracks present in both samples glide; everything else holds the previous
+    sample (a vanished track shouldn't slide toward a stranger)."""
+    from dataclasses import replace
+
+    if nxt is None or t <= 0.0:
+        return prev
+    next_by_id = {p.track_id: p for p in nxt.players}
+    players = tuple(
+        replace(p, bbox=_lerp_bbox(p.bbox, next_by_id[p.track_id].bbox, t))
+        if p.track_id in next_by_id else p
+        for p in prev.players
+    )
+    ball = prev.ball
+    if prev.ball is not None and nxt.ball is not None:
+        ball = replace(prev.ball, bbox=_lerp_bbox(prev.ball.bbox, nxt.ball.bbox, t))
+    return replace(prev, players=players, ball=ball)
+
+
+def _tween_identity(ip: IdentityPoint | None, ip_next: IdentityPoint | None, t: float):
+    from dataclasses import replace
+
+    if (
+        ip is None or ip_next is None or t <= 0.0
+        or ip.bbox is None or ip_next.bbox is None
+        or ip.track_id != ip_next.track_id
+    ):
+        return ip
+    return replace(ip, bbox=_lerp_bbox(ip.bbox, ip_next.bbox, t))
+
+
 def _jersey_numbers(frames: list[FrameObservation]) -> dict[int, str]:
     """track_id -> jersey number, bound only when every read on the track
     agrees (mirrors the identity layer's conflict guard)."""
@@ -166,12 +210,19 @@ def render_debug_video(
                 fi += 1
             fo = frames[fi]
             if fo.frame_index <= src_idx:   # first sample may start later
+                nxt = frames[fi + 1] if fi + 1 < len(frames) else None
+                span = (nxt.frame_index - fo.frame_index) if nxt else 0
+                t = (src_idx - fo.frame_index) / span if span > 0 else 0.0
+                t = min(max(t, 0.0), 1.0)
+                view = _tween(fo, nxt, t)
                 ip = id_by_ts.get(_ts_key(fo.timestamp_s))
+                ip_next = id_by_ts.get(_ts_key(nxt.timestamp_s)) if nxt else None
+                ip_view = _tween_identity(ip, ip_next, t)
                 sp = score_by_ts.get(_ts_key(fo.timestamp_s))
-                _draw_players(img, fo, numbers)
-                _draw_ball(img, fo)
-                _draw_target(img, ip)
-                _draw_hud(img, fo, ip, sp, have_scores)
+                _draw_players(img, view, numbers)
+                _draw_ball(img, view)
+                _draw_target(img, ip_view)
+                _draw_hud(img, view, ip_view, sp, have_scores)
             writer.write(img)
             src_idx += 1
     finally:
